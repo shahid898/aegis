@@ -99,8 +99,14 @@ class LlmService {
   Future<String> _askOnce(String userText, {required int maxTokens}) async {
     final model = await _ensureModel(maxTokens: maxTokens);
     final session = await model.createSession(
-      temperature: 0.7,
-      topK: 40,
+      // Gemma's published defaults — temp=0.7 + topK=40 was making the
+      // model collapse onto repeated `<unused3>` tokens because the
+      // truncated probability mass left no escape from a degenerate loop.
+      // 1.0 / 64 / 0.95 is what HuggingFace's tokenizer_config recommends
+      // for Gemma instruction-tuned variants and matches the template the
+      // weights were trained against.
+      temperature: 1.0,
+      topK: 64,
       topP: 0.95,
       systemInstruction: _aegisSystemPrompt,
     );
@@ -118,8 +124,14 @@ class LlmService {
   }) async* {
     final model = await _ensureModel(maxTokens: maxTokens);
     final session = await model.createSession(
-      temperature: 0.7,
-      topK: 40,
+      // Gemma's published defaults — temp=0.7 + topK=40 was making the
+      // model collapse onto repeated `<unused3>` tokens because the
+      // truncated probability mass left no escape from a degenerate loop.
+      // 1.0 / 64 / 0.95 is what HuggingFace's tokenizer_config recommends
+      // for Gemma instruction-tuned variants and matches the template the
+      // weights were trained against.
+      temperature: 1.0,
+      topK: 64,
       topP: 0.95,
       systemInstruction: _aegisSystemPrompt,
     );

@@ -84,15 +84,15 @@ class _HomeView extends StatelessWidget {
   }
 
   String _buttonHint(AssistantStage stage) => switch (stage) {
-        AssistantStage.idle => 'Hold to talk · long-press for SOS',
-        AssistantStage.preparing => 'Getting ready…',
-        AssistantStage.listening => 'Release to send',
-        AssistantStage.transcribing => 'Transcribing…',
-        AssistantStage.thinking => 'Thinking…',
-        AssistantStage.speaking => 'Aegis is speaking',
-        AssistantStage.degraded => 'Voice disabled — tap SOS',
-        AssistantStage.error => 'Tap to retry',
-      };
+    AssistantStage.idle => 'Tap to start · long-press for SOS',
+    AssistantStage.preparing => 'Getting ready…',
+    AssistantStage.listening => 'Listening… tap to stop',
+    AssistantStage.transcribing => 'Transcribing…',
+    AssistantStage.thinking => 'Thinking… tap to interrupt',
+    AssistantStage.speaking => 'Aegis is speaking · tap to stop',
+    AssistantStage.degraded => 'Voice disabled — tap SOS',
+    AssistantStage.error => 'Tap to retry',
+  };
 }
 
 class _Header extends StatelessWidget {
@@ -104,17 +104,11 @@ class _Header extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Aegis',
-          style: Theme.of(context).textTheme.headlineMedium,
-        ),
+        Text('Aegis', style: Theme.of(context).textTheme.headlineMedium),
         const SizedBox(height: 4),
         const Text(
           'Offline. Ready.',
-          style: TextStyle(
-            color: AegisColors.onSurfaceMuted,
-            fontSize: 14,
-          ),
+          style: TextStyle(color: AegisColors.onSurfaceMuted, fontSize: 14),
         ),
       ],
     );
@@ -131,11 +125,11 @@ class _TranscriptArea extends StatelessWidget {
     final hasResponse = state.response.isNotEmpty;
 
     if (!hasTranscript && !hasResponse) {
-      return Center(
+      return const Center(
         child: Text(
-          'Press and hold the button below,\nthen ask Aegis anything.',
+          'Tap the button below to start a\nconversation with Aegis.',
           textAlign: TextAlign.center,
-          style: const TextStyle(
+          style: TextStyle(
             color: AegisColors.onSurfaceMuted,
             fontSize: 16,
             height: 1.4,
@@ -269,22 +263,15 @@ class _PttButton extends StatelessWidget {
       endColor = AegisColors.primaryDark;
     }
 
+    final isActiveConversation = state.isConversationActive;
+    final showStopGlyph = isActiveConversation;
+
     return GestureDetector(
       onLongPress: () => _sos(context),
-      onTapDown: (_) {
-        if (!state.isBusy && !isDegraded) {
-          cubit.startListening();
-        }
-      },
-      onTapUp: (_) {
-        if (state.stage == AssistantStage.listening) {
-          cubit.stopAndAsk();
-        }
-      },
-      onTapCancel: () {
-        if (state.stage == AssistantStage.listening) {
-          cubit.cancel();
-        }
+      onTap: () {
+        if (isDegraded) return;
+        if (state.stage == AssistantStage.preparing) return;
+        cubit.toggleConversation();
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
@@ -298,14 +285,20 @@ class _PttButton extends StatelessWidget {
           ),
           boxShadow: [
             BoxShadow(
-              color: startColor.withValues(alpha: isListening ? 0.55 : 0.35),
-              blurRadius: isListening ? 68 : 48,
-              spreadRadius: isListening ? 10 : 6,
+              color: startColor.withValues(
+                alpha: isActiveConversation ? 0.55 : 0.35,
+              ),
+              blurRadius: isActiveConversation ? 68 : 48,
+              spreadRadius: isActiveConversation ? 10 : 6,
             ),
           ],
         ),
         child: Icon(
-          isDegraded ? Icons.sos : (isListening ? Icons.graphic_eq : Icons.mic),
+          isDegraded
+              ? Icons.sos
+              : showStopGlyph
+              ? (isListening ? Icons.graphic_eq : Icons.stop_rounded)
+              : Icons.mic,
           color: Colors.white,
           size: 88,
         ),
@@ -341,7 +334,8 @@ class _PttButton extends StatelessWidget {
     } on Exception {
       final region = storage.selectedRegion;
       if (region != null) {
-        locationText = 'Emergency. Last known region: '
+        locationText =
+            'Emergency. Last known region: '
             '${region.districtName} (${region.countryCode}).';
       }
     }

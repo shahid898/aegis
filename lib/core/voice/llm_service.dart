@@ -5,17 +5,33 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'model_pack.dart';
 import 'model_registry.dart';
 
-/// Reserved Gemma vocabulary placeholders (e.g. `<unused3>`) leak through
-/// when the LiteRT-LM chat template doesn't perfectly line up with what the
-/// weights were trained against. They are never meaningful output, so we
-/// strip them in both the streaming and non-streaming paths.
-final RegExp _unusedToken = RegExp(r'<unused\d+>');
+/// Reserved Gemma / LiteRT-LM tokens that should never appear in a final
+/// user-facing reply. We've observed at least `<unused3>` and `<mask>`
+/// leak through when the LiteRT-LM chat template doesn't line up perfectly
+/// with what the weights were trained against — the model lands in regions
+/// of the embedding space where these reserved IDs have non-trivial
+/// probability mass and the sampler eventually picks them. The list below
+/// covers every special token Gemma's tokenizer reserves plus the chat-
+/// template markers LiteRT-LM injects (so a half-emitted `<|turn>` or
+/// `<channel|>` gets cleaned up too). The pattern is restricted to
+/// `<word>` / `<|word|>` shapes so it won't clobber legitimate text like
+/// `<3` or arrow glyphs.
+final RegExp _reservedToken = RegExp(
+  r'<\|?(?:'
+  r'unused\d+|mask|pad|eos|bos|unk|sep|cls'
+  r'|start_of_turn|end_of_turn|start_of_image|end_of_image'
+  r'|extra_id_\d+'
+  r'|turn|think|channel|im_start|im_end'
+  r')\|?>',
+);
 
-/// Gemma 4 IT chain-of-thought delimiters. We turn `enableThinking: true`
-/// on at the session because letting the model reason internally produces
-/// better multi-step emergency advice — but we don't surface that scratchpad
-/// to the user. Everything between these markers is dropped by the
-/// streaming filter, leaving only the actual reply.
+/// Gemma 4 IT chain-of-thought delimiters. With `enableThinking: true` the
+/// model wraps its scratchpad in these markers and emits the real reply
+/// after `<channel|>`. We keep the reasoning *internal* — the streaming
+/// filter drops everything between the markers so the cubit only ever sees
+/// the final answer. (The same filter doubles as a safety net when
+/// `enableThinking` is later flipped off, since flutter_gemma's own chat
+/// layer warns the flag "is not reliable for all model bundles".)
 const String _thinkStart = '<|channel>thought\n';
 const String _thinkEnd = '<channel|>';
 final RegExp _thinkBlockRegex = RegExp(
@@ -43,14 +59,28 @@ danger, or trying to help someone who is. Follow these rules on every turn:
 /// Wraps flutter_gemma's modern API so the rest of the app can treat the
 /// LLM as a simple text-in/text-out service.
 ///
-/// Model lifecycle:
+/// Lifecycle:
 ///   setPack(pack) → install the pack with flutter_gemma (uses the file
-///     we already downloaded) → getActiveModel → cache one session.
-///   Subsequent ask()/askStream() calls reuse the same session.
+///     we already downloaded) → getActiveModel → cache one model AND
+///     one [InferenceModelSession]. Subsequent ask()/askStream() calls
+///     reuse the same session.
 ///
-/// Sessions are rebuilt between turns so the model forgets previous
-/// conversation — emergency guidance is stateless. This keeps token
-/// usage low and avoids accidental hallucinated context carryover.
+/// **Why we cache the session.** Internally, every flutter_gemma session
+/// constructs a fresh LiteRT-LM `Conversation` and prefills the system
+/// instruction. Our `_aegisSystemPrompt` is ~150 tokens, which on a
+/// mid-tier Android device adds 1–3 s of latency to the *very first
+/// token* of every reply if we recreate the session per turn. Google's
+/// own AI Edge Gallery sample does what we now do: build the
+/// conversation once and call `sendMessage` on it for every user turn —
+/// see `LlmChatModelHelper.kt`. The session-reuse model means turn N+1
+/// starts decoding immediately because the system prompt is already
+/// cached in the KV-store.
+///
+/// **Conversation history.** Reusing the session means the model sees
+/// prior turns. That is intentional and matches the Gallery: a panicked
+/// user re-asking the same question benefits from continuity. Use
+/// [resetSession] when starting a *new* top-level conversation so old
+/// context doesn't bleed in.
 class LlmService {
   LlmService(this._registry);
 
@@ -58,6 +88,7 @@ class LlmService {
 
   VoiceModelPack? _pack;
   InferenceModel? _model;
+  InferenceModelSession? _session;
   bool _installed = false;
   Future<void>? _loadFuture;
 
@@ -115,38 +146,45 @@ class LlmService {
   }
 
   Future<String> _askOnce(String userText, {required int maxTokens}) async {
-    final model = await _ensureModel(maxTokens: maxTokens);
-    final session = await model.createSession(
-      // Gemma's published defaults — temp=0.7 + topK=40 was making the
-      // model collapse onto repeated `<unused3>` tokens because the
-      // truncated probability mass left no escape from a degenerate loop.
-      // 1.0 / 64 / 0.95 is what HuggingFace's tokenizer_config recommends
-      // for Gemma instruction-tuned variants and matches the template the
-      // weights were trained against.
-      temperature: 1.0,
-      topK: 64,
-      topP: 0.95,
-      // Let Gemma 4 IT reason internally — better answers on multi-step
-      // emergency advice. The thinking block is wrapped in
-      // `<|channel>thought\n...<channel|>` and stripped by `_sanitizeStream`
-      // / `_sanitizeFinalResponse` before the user ever sees it, so flipping
-      // this on costs only inference time, not UX clarity.
-      enableThinking: true,
-      systemInstruction: _aegisSystemPrompt,
-    );
+    final session = await _ensureSession(maxTokens: maxTokens);
     try {
       await session.addQueryChunk(Message.text(text: userText, isUser: true));
       final raw = await session.getResponse();
       return _sanitizeFinalResponse(raw);
-    } finally {
-      await session.close();
+    } on Object {
+      // The session may be in an inconsistent state after a generation
+      // failure. Drop it so the next call rebuilds a clean conversation
+      // (and so the OpenCL → CPU fallback in [_shouldFallbackToCpu] picks
+      // up a fresh session on the new backend).
+      await _disposeSession();
+      rethrow;
     }
+    // NB: the session is intentionally NOT closed here. We reuse the
+    // same conversation across turns so the system prompt only prefills
+    // once — see the class docstring for why.
   }
 
   Stream<String> _askStreamOnce(
     String userText, {
     required int maxTokens,
   }) async* {
+    final session = await _ensureSession(maxTokens: maxTokens);
+    try {
+      await session.addQueryChunk(Message.text(text: userText, isUser: true));
+      yield* _sanitizeStream(session.getResponseAsync());
+    } on Object {
+      await _disposeSession();
+      rethrow;
+    }
+  }
+
+  /// Lazily build (or return the cached) session for the active model.
+  /// Sampling params and the system prompt are baked in at session-
+  /// creation time — keep them fixed across the app, otherwise we'd lose
+  /// the prefill cache benefit.
+  Future<InferenceModelSession> _ensureSession({required int maxTokens}) async {
+    final cached = _session;
+    if (cached != null) return cached;
     final model = await _ensureModel(maxTokens: maxTokens);
     final session = await model.createSession(
       // Gemma's published defaults — temp=0.7 + topK=40 was making the
@@ -154,33 +192,58 @@ class LlmService {
       // truncated probability mass left no escape from a degenerate loop.
       // 1.0 / 64 / 0.95 is what HuggingFace's tokenizer_config recommends
       // for Gemma instruction-tuned variants and matches the template the
-      // weights were trained against.
+      // weights were trained against. Google's AI Edge Gallery uses the
+      // same numbers (DEFAULT_TOPK=64, DEFAULT_TOPP=0.95f,
+      // DEFAULT_TEMPERATURE=1.0f).
       temperature: 1.0,
       topK: 64,
       topP: 0.95,
-      // Let Gemma 4 IT reason internally — better answers on multi-step
-      // emergency advice. The thinking block is wrapped in
-      // `<|channel>thought\n...<channel|>` and stripped by `_sanitizeStream`
-      // / `_sanitizeFinalResponse` before the user ever sees it, so flipping
-      // this on costs only inference time, not UX clarity.
-      enableThinking: true,
+      // Thinking OFF for time-to-first-token. With `enableThinking: true`
+      // Gemma 4 IT decodes a full `<|channel>thought\n...<channel|>`
+      // reasoning chain *before* the user-visible reply — measured at
+      // 10-40s on-device, which is unusable for an emergency TTS loop.
+      // We trade internal reasoning for response speed and rely on the
+      // system prompt's "answer one step at a time, prefer numbered
+      // steps" instruction to give the user *externally* structured
+      // guidance instead. The thinking-block scrubber stays in place as
+      // a belt-and-suspenders safety net in case the model emits a
+      // thought header anyway (the SDK's docs warn that the
+      // `enableThinking` flag is "not reliable for all model bundles").
+      // Gallery's `BooleanSwitchConfig(key = ENABLE_THINKING,
+      // defaultValue = false)` agrees with this tradeoff.
+      enableThinking: false,
       systemInstruction: _aegisSystemPrompt,
     );
-    try {
-      await session.addQueryChunk(Message.text(text: userText, isUser: true));
-      yield* _sanitizeStream(session.getResponseAsync());
-    } finally {
-      await session.close();
+    _session = session;
+    return session;
+  }
+
+  /// Close the cached session and clear conversation history. The next
+  /// [ask] / [askStream] will lazily build a fresh one. Use this between
+  /// distinct user conversations so context from a prior emergency does
+  /// not leak into a new one.
+  Future<void> resetSession() => _disposeSession();
+
+  Future<void> _disposeSession() async {
+    final session = _session;
+    _session = null;
+    if (session != null) {
+      try {
+        await session.close();
+      } on Object {
+        // best-effort — the native conversation may already be torn down.
+      }
     }
   }
 
   /// Removes thinking blocks and reserved placeholder tokens from a fully
   /// accumulated response. Mirrors flutter_gemma's
   /// `ModelThinkingFilter.removeThinkingFromText` for `ModelType.gemmaIt`,
-  /// plus a `<unused\d+>` strip for residual reserved-vocab leaks.
+  /// plus a broader [_reservedToken] strip that catches `<unused\d+>`,
+  /// `<mask>`, leftover chat-template markers, and friends.
   String _sanitizeFinalResponse(String response) {
     final withoutThinking = response.replaceAll(_thinkBlockRegex, '');
-    return withoutThinking.replaceAll(_unusedToken, '').trim();
+    return withoutThinking.replaceAll(_reservedToken, '').trim();
   }
 
   /// Streaming version of [_sanitizeFinalResponse]. Buffers across token
@@ -197,7 +260,7 @@ class LlmService {
     var buffer = '';
     var inThinking = false;
 
-    String stripUnused(String text) => text.replaceAll(_unusedToken, '');
+    String stripReserved(String text) => text.replaceAll(_reservedToken, '');
 
     // Longest suffix of [text] that is a prefix of [marker]. Used to hold
     // back trailing bytes that might complete a marker on the next token.
@@ -226,13 +289,13 @@ class LlmService {
         } else {
           final startIdx = buffer.indexOf(_thinkStart);
           if (startIdx >= 0) {
-            final safe = stripUnused(buffer.substring(0, startIdx));
+            final safe = stripReserved(buffer.substring(0, startIdx));
             if (safe.isNotEmpty) yield safe;
             buffer = buffer.substring(startIdx + _thinkStart.length);
             inThinking = true;
           } else {
             final partial = partialSuffix(buffer, _thinkStart);
-            final safe = stripUnused(
+            final safe = stripReserved(
               buffer.substring(0, buffer.length - partial),
             );
             if (safe.isNotEmpty) yield safe;
@@ -246,7 +309,7 @@ class LlmService {
     // a thinking block at this point the model never closed it, so we drop
     // the leftover (it's chain-of-thought we don't want to show anyway).
     if (!inThinking && buffer.isNotEmpty) {
-      final tail = stripUnused(buffer);
+      final tail = stripReserved(buffer);
       if (tail.isNotEmpty) yield tail;
     }
   }
@@ -329,6 +392,9 @@ class LlmService {
   }
 
   Future<void> _disposeModel() async {
+    // Sessions hold a native handle into the model — close them first so
+    // the LiteRT-LM Conversation is gone before the Engine is.
+    await _disposeSession();
     final model = _model;
     _model = null;
     if (model != null) {

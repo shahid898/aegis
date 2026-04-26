@@ -159,6 +159,10 @@ class AssistantCubit extends Cubit<AssistantState> {
     _conversationActive = true;
     // Reset transcript/response so the user sees a clean slate.
     emit(state.copyWith(transcript: '', response: '', errorMessage: null));
+    // Drop any LLM history from a prior conversation. Within *this*
+    // conversation we keep the session warm across turns so the system
+    // prompt prefills only once — see [LlmService] docs.
+    unawaited(_llm.resetSession());
     // Run the loop in the background. Errors emit to state; the loop
     // ends on its own when [_conversationActive] flips to false.
     unawaited(_runListenLoop());

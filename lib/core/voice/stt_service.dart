@@ -51,6 +51,12 @@ class SttService {
   so.VoiceActivityDetector? _vad;
   VoiceModelPack? _loadedPack;
   VoiceModelPack? _vadPack;
+  // Whisper's language is baked into the recognizer config — to switch
+  // languages we must dispose and rebuild. We track the language the
+  // current recognizer was built with so subsequent calls with a
+  // different code trigger a rebuild instead of silently ignoring the
+  // new hint.
+  String? _recognizerLanguage;
   bool _bindingsInitialized = false;
 
   VoiceModelPack? get pack => _loadedPack;
@@ -309,8 +315,17 @@ class SttService {
   Future<so.OfflineRecognizer> _ensureOfflineRecognizer({
     String? language,
   }) async {
+    final normalized = (language ?? '').toLowerCase();
     final existing = _offline;
-    if (existing != null) return existing;
+    if (existing != null && _recognizerLanguage == normalized) {
+      return existing;
+    }
+    // Language changed (or first build) — drop the old recognizer so
+    // the new language hint actually takes effect.
+    if (existing != null) {
+      existing.free();
+      _offline = null;
+    }
 
     final pack = _requireInstalledPack();
     final encoderRel = pack.encoderFile ?? pack.modelFile;
@@ -334,7 +349,10 @@ class SttService {
         whisper: so.OfflineWhisperModelConfig(
           encoder: encoderPath,
           decoder: decoderPath,
-          language: language ?? '',
+          // Empty string = Whisper auto-detect; a language code pins the
+          // decoder so short / noisy segments don't drift to wildly
+          // wrong languages.
+          language: normalized,
           task: 'transcribe',
           tailPaddings: -1,
         ),
@@ -348,6 +366,7 @@ class SttService {
 
     final recognizer = so.OfflineRecognizer(config);
     _offline = recognizer;
+    _recognizerLanguage = normalized;
     return recognizer;
   }
 
@@ -419,6 +438,7 @@ class SttService {
   void _disposeRecognizer() {
     final offline = _offline;
     _offline = null;
+    _recognizerLanguage = null;
     offline?.free();
   }
 

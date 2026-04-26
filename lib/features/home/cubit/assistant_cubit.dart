@@ -277,8 +277,13 @@ class AssistantCubit extends Cubit<AssistantState> {
 
     final completer = Completer<String?>();
 
+    // Pin Whisper to the user's selected language. Without this hint,
+    // tiny-Whisper auto-detects language per-segment and drifts to wildly
+    // wrong codes (Japanese, Arabic) on short utterances or noisy audio.
+    // Empty string keeps the auto-detect path for users who haven't picked
+    // a language yet.
     _sttSub = _stt
-        .transcribeStream(audioStream)
+        .transcribeStream(audioStream, language: _languageCode)
         .listen(
           (update) {
             if (!_conversationActive) return;

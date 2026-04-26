@@ -5,6 +5,24 @@ import 'package:flutter_gemma/flutter_gemma.dart';
 import 'model_pack.dart';
 import 'model_registry.dart';
 
+/// Reserved Gemma vocabulary placeholders (e.g. `<unused3>`) leak through
+/// when the LiteRT-LM chat template doesn't perfectly line up with what the
+/// weights were trained against. They are never meaningful output, so we
+/// strip them in both the streaming and non-streaming paths.
+final RegExp _unusedToken = RegExp(r'<unused\d+>');
+
+/// Gemma 4 IT chain-of-thought delimiters. We turn `enableThinking: true`
+/// on at the session because letting the model reason internally produces
+/// better multi-step emergency advice — but we don't surface that scratchpad
+/// to the user. Everything between these markers is dropped by the
+/// streaming filter, leaving only the actual reply.
+const String _thinkStart = '<|channel>thought\n';
+const String _thinkEnd = '<channel|>';
+final RegExp _thinkBlockRegex = RegExp(
+  r'<\|channel>thought\n.*?<channel\|>',
+  dotAll: true,
+);
+
 /// Emergency-assistant system prompt shared by every session. Kept short
 /// because Gemma 3n context is precious and emergency answers must stay
 /// terse and actionable.
@@ -108,11 +126,18 @@ class LlmService {
       temperature: 1.0,
       topK: 64,
       topP: 0.95,
+      // Let Gemma 4 IT reason internally — better answers on multi-step
+      // emergency advice. The thinking block is wrapped in
+      // `<|channel>thought\n...<channel|>` and stripped by `_sanitizeStream`
+      // / `_sanitizeFinalResponse` before the user ever sees it, so flipping
+      // this on costs only inference time, not UX clarity.
+      enableThinking: true,
       systemInstruction: _aegisSystemPrompt,
     );
     try {
       await session.addQueryChunk(Message.text(text: userText, isUser: true));
-      return await session.getResponse();
+      final raw = await session.getResponse();
+      return _sanitizeFinalResponse(raw);
     } finally {
       await session.close();
     }
@@ -133,13 +158,96 @@ class LlmService {
       temperature: 1.0,
       topK: 64,
       topP: 0.95,
+      // Let Gemma 4 IT reason internally — better answers on multi-step
+      // emergency advice. The thinking block is wrapped in
+      // `<|channel>thought\n...<channel|>` and stripped by `_sanitizeStream`
+      // / `_sanitizeFinalResponse` before the user ever sees it, so flipping
+      // this on costs only inference time, not UX clarity.
+      enableThinking: true,
       systemInstruction: _aegisSystemPrompt,
     );
     try {
       await session.addQueryChunk(Message.text(text: userText, isUser: true));
-      yield* session.getResponseAsync();
+      yield* _sanitizeStream(session.getResponseAsync());
     } finally {
       await session.close();
+    }
+  }
+
+  /// Removes thinking blocks and reserved placeholder tokens from a fully
+  /// accumulated response. Mirrors flutter_gemma's
+  /// `ModelThinkingFilter.removeThinkingFromText` for `ModelType.gemmaIt`,
+  /// plus a `<unused\d+>` strip for residual reserved-vocab leaks.
+  String _sanitizeFinalResponse(String response) {
+    final withoutThinking = response.replaceAll(_thinkBlockRegex, '');
+    return withoutThinking.replaceAll(_unusedToken, '').trim();
+  }
+
+  /// Streaming version of [_sanitizeFinalResponse]. Buffers across token
+  /// boundaries because the markers we filter (`<|channel>thought\n` and
+  /// `<channel|>`) almost always span multiple native tokens, so a naive
+  /// per-token regex would never see them.
+  ///
+  /// State machine:
+  ///   * outside thinking — emit safe bytes, hold back any tail that could
+  ///     be the start of a `_thinkStart` marker.
+  ///   * inside thinking — drop bytes, hold back any tail that could be
+  ///     the start of a `_thinkEnd` marker; transition out when found.
+  Stream<String> _sanitizeStream(Stream<String> tokens) async* {
+    var buffer = '';
+    var inThinking = false;
+
+    String stripUnused(String text) => text.replaceAll(_unusedToken, '');
+
+    // Longest suffix of [text] that is a prefix of [marker]. Used to hold
+    // back trailing bytes that might complete a marker on the next token.
+    int partialSuffix(String text, String marker) {
+      final maxLen =
+          text.length < marker.length - 1 ? text.length : marker.length - 1;
+      for (var len = maxLen; len > 0; len--) {
+        if (marker.startsWith(text.substring(text.length - len))) return len;
+      }
+      return 0;
+    }
+
+    await for (final token in tokens) {
+      buffer += token;
+      while (buffer.isNotEmpty) {
+        if (inThinking) {
+          final endIdx = buffer.indexOf(_thinkEnd);
+          if (endIdx >= 0) {
+            buffer = buffer.substring(endIdx + _thinkEnd.length);
+            inThinking = false;
+          } else {
+            final partial = partialSuffix(buffer, _thinkEnd);
+            buffer = buffer.substring(buffer.length - partial);
+            break; // wait for more tokens
+          }
+        } else {
+          final startIdx = buffer.indexOf(_thinkStart);
+          if (startIdx >= 0) {
+            final safe = stripUnused(buffer.substring(0, startIdx));
+            if (safe.isNotEmpty) yield safe;
+            buffer = buffer.substring(startIdx + _thinkStart.length);
+            inThinking = true;
+          } else {
+            final partial = partialSuffix(buffer, _thinkStart);
+            final safe = stripUnused(
+              buffer.substring(0, buffer.length - partial),
+            );
+            if (safe.isNotEmpty) yield safe;
+            buffer = buffer.substring(buffer.length - partial);
+            break;
+          }
+        }
+      }
+    }
+    // Stream ended — flush whatever we held back. If we're still "inside"
+    // a thinking block at this point the model never closed it, so we drop
+    // the leftover (it's chain-of-thought we don't want to show anyway).
+    if (!inThinking && buffer.isNotEmpty) {
+      final tail = stripUnused(buffer);
+      if (tail.isNotEmpty) yield tail;
     }
   }
 

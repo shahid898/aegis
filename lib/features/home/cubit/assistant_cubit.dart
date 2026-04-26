@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
@@ -12,6 +12,31 @@ import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
 
 part 'assistant_cubit.freezed.dart';
+
+/// One completed back-and-forth in a conversation. Appended to
+/// [AssistantState.turns] when the model finishes responding to a turn so
+/// the UI can render the running history (the previous transcript/response
+/// pair otherwise gets clobbered the moment the next utterance starts).
+@immutable
+class ConversationTurn {
+  const ConversationTurn({required this.user, required this.assistant});
+
+  final String user;
+  final String assistant;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ConversationTurn &&
+          other.user == user &&
+          other.assistant == assistant;
+
+  @override
+  int get hashCode => Object.hash(user, assistant);
+
+  @override
+  String toString() => 'ConversationTurn(user: $user, assistant: $assistant)';
+}
 
 /// Stage of the assistant pipeline. The UI reacts to each one: the mic
 /// button pulses on `listening`, the transcript bubble fades in on
@@ -33,6 +58,7 @@ abstract class AssistantState with _$AssistantState {
     @Default(AssistantStage.idle) AssistantStage stage,
     @Default('') String transcript,
     @Default('') String response,
+    @Default(<ConversationTurn>[]) List<ConversationTurn> turns,
     String? errorMessage,
   }) = _AssistantState;
 
@@ -157,8 +183,18 @@ class AssistantCubit extends Cubit<AssistantState> {
     if (!_voiceReady) return;
     if (_conversationActive) return;
     _conversationActive = true;
-    // Reset transcript/response so the user sees a clean slate.
-    emit(state.copyWith(transcript: '', response: '', errorMessage: null));
+    // Reset transcript/response/turns so the user sees a clean slate.
+    // Clearing `turns` here matches the LLM-side reset below: a brand-new
+    // top-level conversation should have no visible history *and* no LLM
+    // memory of prior conversations.
+    emit(
+      state.copyWith(
+        transcript: '',
+        response: '',
+        turns: const <ConversationTurn>[],
+        errorMessage: null,
+      ),
+    );
     // Drop any LLM history from a prior conversation. Within *this*
     // conversation we keep the session warm across turns so the system
     // prompt prefills only once — see [LlmService] docs.
@@ -396,6 +432,24 @@ class AssistantCubit extends Cubit<AssistantState> {
       // while audio is still playing.
       if (spokeAtLeastOne) {
         await _tts.whenIdle;
+      }
+      // Commit the completed turn to the visible history. Otherwise the
+      // next utterance's `transcript: '', response: ''` reset would wipe
+      // the prior bubbles off the screen — we'd appear to have no memory
+      // even though [LlmService] still does.
+      final assistantText = buffer.toString().trim();
+      final userText = transcript.trim();
+      if (userText.isNotEmpty && assistantText.isNotEmpty) {
+        emit(
+          state.copyWith(
+            turns: List.unmodifiable(<ConversationTurn>[
+              ...state.turns,
+              ConversationTurn(user: userText, assistant: assistantText),
+            ]),
+            transcript: '',
+            response: '',
+          ),
+        );
       }
     } on Object catch (e) {
       if (_conversationActive) {

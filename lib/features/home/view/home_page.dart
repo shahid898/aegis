@@ -117,16 +117,56 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _TranscriptArea extends StatelessWidget {
+/// Renders both the running [AssistantState.turns] history and the
+/// in-flight transcript / response bubbles. Owns its own [ScrollController]
+/// so we can pin the view to the most recent bubble as the model streams.
+class _TranscriptArea extends StatefulWidget {
   const _TranscriptArea({required this.state});
   final AssistantState state;
 
   @override
+  State<_TranscriptArea> createState() => _TranscriptAreaState();
+}
+
+class _TranscriptAreaState extends State<_TranscriptArea> {
+  final ScrollController _controller = ScrollController();
+
+  @override
+  void didUpdateWidget(_TranscriptArea oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final old = oldWidget.state;
+    final next = widget.state;
+    final grew =
+        next.turns.length != old.turns.length ||
+        next.transcript.length != old.transcript.length ||
+        next.response.length != old.response.length;
+    if (grew) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_controller.hasClients) return;
+        _controller.animateTo(
+          _controller.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOut,
+        );
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final state = widget.state;
     final hasTranscript = state.transcript.isNotEmpty;
     final hasResponse = state.response.isNotEmpty;
+    final hasHistory = state.turns.isNotEmpty;
+    final hasInflight = hasTranscript || hasResponse;
 
-    if (!hasTranscript && !hasResponse) {
+    if (!hasInflight && !hasHistory) {
       return const Center(
         child: Text(
           'Tap the button below to start a\nconversation with Aegis.',
@@ -140,25 +180,64 @@ class _TranscriptArea extends StatelessWidget {
       );
     }
 
-    return ListView(
-      children: [
-        if (hasTranscript)
-          _Bubble(
-            label: 'You',
-            text: state.transcript,
-            align: CrossAxisAlignment.end,
-            background: AegisColors.primary.withValues(alpha: 0.10),
+    final itemCount = state.turns.length + (hasInflight ? 1 : 0);
+
+    return ListView.builder(
+      controller: _controller,
+      itemCount: itemCount,
+      itemBuilder: (context, index) {
+        final isFirst = index == 0;
+        if (index < state.turns.length) {
+          final turn = state.turns[index];
+          return Padding(
+            padding: EdgeInsets.only(top: isFirst ? 0 : 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _Bubble(
+                  label: 'You',
+                  text: turn.user,
+                  align: CrossAxisAlignment.end,
+                  background: AegisColors.primary.withValues(alpha: 0.10),
+                ),
+                const SizedBox(height: 12),
+                _Bubble(
+                  label: 'Aegis',
+                  text: turn.assistant,
+                  align: CrossAxisAlignment.start,
+                  background: Colors.white,
+                ),
+              ],
+            ),
+          );
+        }
+
+        // In-flight turn: streaming transcript and/or partial response.
+        return Padding(
+          padding: EdgeInsets.only(top: isFirst ? 0 : 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (hasTranscript)
+                _Bubble(
+                  label: 'You',
+                  text: state.transcript,
+                  align: CrossAxisAlignment.end,
+                  background: AegisColors.primary.withValues(alpha: 0.10),
+                ),
+              if (hasResponse) ...[
+                if (hasTranscript) const SizedBox(height: 12),
+                _Bubble(
+                  label: 'Aegis',
+                  text: state.response,
+                  align: CrossAxisAlignment.start,
+                  background: Colors.white,
+                ),
+              ],
+            ],
           ),
-        if (hasResponse) ...[
-          const SizedBox(height: 12),
-          _Bubble(
-            label: 'Aegis',
-            text: state.response,
-            align: CrossAxisAlignment.start,
-            background: Colors.white,
-          ),
-        ],
-      ],
+        );
+      },
     );
   }
 }

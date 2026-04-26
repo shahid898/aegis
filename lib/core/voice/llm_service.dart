@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 
 import 'model_pack.dart';
@@ -62,25 +63,39 @@ danger, or trying to help someone who is. Follow these rules on every turn:
 /// Lifecycle:
 ///   setPack(pack) → install the pack with flutter_gemma (uses the file
 ///     we already downloaded) → getActiveModel → cache one model AND
-///     one [InferenceModelSession]. Subsequent ask()/askStream() calls
-///     reuse the same session.
+///     one [InferenceChat]. Subsequent ask()/askStream() calls reuse the
+///     same chat object (and therefore the same underlying conversation).
 ///
-/// **Why we cache the session.** Internally, every flutter_gemma session
-/// constructs a fresh LiteRT-LM `Conversation` and prefills the system
-/// instruction. Our `_aegisSystemPrompt` is ~150 tokens, which on a
-/// mid-tier Android device adds 1–3 s of latency to the *very first
-/// token* of every reply if we recreate the session per turn. Google's
-/// own AI Edge Gallery sample does what we now do: build the
-/// conversation once and call `sendMessage` on it for every user turn —
-/// see `LlmChatModelHelper.kt`. The session-reuse model means turn N+1
-/// starts decoding immediately because the system prompt is already
-/// cached in the KV-store.
+/// **Why we use [InferenceChat] instead of raw [InferenceModelSession].**
+/// flutter_gemma exposes two APIs for multi-turn conversations:
 ///
-/// **Conversation history.** Reusing the session means the model sees
-/// prior turns. That is intentional and matches the Gallery: a panicked
-/// user re-asking the same question benefits from continuity. Use
-/// [resetSession] when starting a *new* top-level conversation so old
-/// context doesn't bleed in.
+///   * `model.createSession()` — one underlying LiteRT-LM `Conversation`
+///     reused per `addQueryChunk` + `getResponseAsync`. In theory the
+///     `Conversation` retains history natively; in practice we observed
+///     turn N+1 sometimes losing context from turn N (and `Conversation`
+///     exposes no replay API). It's the right primitive for one-shot
+///     prompts but not for chat.
+///   * `model.createChat()` — wraps a session with explicit history
+///     tracking on the Dart side (`_modelHistory`). When the cumulative
+///     token count approaches the model's context window, the chat
+///     transparently recreates the session and replays the saved
+///     messages, preserving the conversation across the boundary. This
+///     is the path the flutter_gemma example app and integration tests
+///     all take.
+///
+/// **Speed.** Both APIs share the same prefill-cache benefit: the system
+/// instruction is baked into the underlying session at creation time, so
+/// after the first turn the ~150-token `_aegisSystemPrompt` is already
+/// in the KV-store. Caching the [InferenceChat] across turns therefore
+/// gives us *both* fast time-to-first-token *and* correct multi-turn
+/// memory. Google's AI Edge Gallery uses the equivalent native pattern
+/// (one `Conversation` per chat instance, reused for every user turn).
+///
+/// **Conversation history.** Reusing the chat means the model sees
+/// prior turns within a conversation — exactly what a panicked user
+/// re-asking the same question needs. Call [resetSession] (kept under
+/// that name for backward compatibility) when starting a *new*
+/// top-level conversation so old context doesn't bleed in.
 class LlmService {
   LlmService(this._registry);
 
@@ -88,7 +103,7 @@ class LlmService {
 
   VoiceModelPack? _pack;
   InferenceModel? _model;
-  InferenceModelSession? _session;
+  InferenceChat? _chat;
   bool _installed = false;
   Future<void>? _loadFuture;
 
@@ -146,47 +161,101 @@ class LlmService {
   }
 
   Future<String> _askOnce(String userText, {required int maxTokens}) async {
-    final session = await _ensureSession(maxTokens: maxTokens);
+    final chat = await _ensureChat(maxTokens: maxTokens);
+    _logHistorySnapshot(chat, label: 'ask', incoming: userText);
     try {
-      await session.addQueryChunk(Message.text(text: userText, isUser: true));
-      final raw = await session.getResponse();
+      await chat.addQueryChunk(Message.text(text: userText, isUser: true));
+      final response = await chat.generateChatResponse();
+      final raw = response is TextResponse ? response.token : '';
       return _sanitizeFinalResponse(raw);
     } on Object {
-      // The session may be in an inconsistent state after a generation
-      // failure. Drop it so the next call rebuilds a clean conversation
-      // (and so the OpenCL → CPU fallback in [_shouldFallbackToCpu] picks
-      // up a fresh session on the new backend).
-      await _disposeSession();
+      // The chat (and therefore its underlying session) may be in an
+      // inconsistent state after a generation failure. Drop it so the
+      // next call rebuilds a clean conversation (and so the OpenCL → CPU
+      // fallback in [_shouldFallbackToCpu] picks up a fresh chat on the
+      // new backend).
+      await _disposeChat();
       rethrow;
     }
-    // NB: the session is intentionally NOT closed here. We reuse the
-    // same conversation across turns so the system prompt only prefills
-    // once — see the class docstring for why.
+    // NB: the chat is intentionally NOT closed here. We reuse it across
+    // turns so the system prompt only prefills once and so the model
+    // sees prior turns — see the class docstring for why.
   }
 
   Stream<String> _askStreamOnce(
     String userText, {
     required int maxTokens,
   }) async* {
-    final session = await _ensureSession(maxTokens: maxTokens);
+    final chat = await _ensureChat(maxTokens: maxTokens);
+    _logHistorySnapshot(chat, label: 'askStream', incoming: userText);
     try {
-      await session.addQueryChunk(Message.text(text: userText, isUser: true));
-      yield* _sanitizeStream(session.getResponseAsync());
+      await chat.addQueryChunk(Message.text(text: userText, isUser: true));
+      yield* _sanitizeStream(
+        chat
+            .generateChatResponseAsync()
+            .where((r) => r is TextResponse)
+            .map((r) => (r as TextResponse).token)
+            .where((t) => t.isNotEmpty),
+      );
     } on Object {
-      await _disposeSession();
+      await _disposeChat();
       rethrow;
     }
   }
 
-  /// Lazily build (or return the cached) session for the active model.
-  /// Sampling params and the system prompt are baked in at session-
-  /// creation time — keep them fixed across the app, otherwise we'd lose
-  /// the prefill cache benefit.
-  Future<InferenceModelSession> _ensureSession({required int maxTokens}) async {
-    final cached = _session;
+  /// Diagnostic logger for verifying multi-turn context retention.
+  ///
+  /// Every turn prints `[LlmService] askStream turn=3 history=4 chat=#a82c1f
+  /// incoming="what should I do next" history=[u:"I cut my hand…", a:"Apply
+  /// firm pressure with a clean cloth…", u:"is bleeding still bad", …]`.
+  ///
+  /// What to look for in `adb logcat`:
+  ///   * `chat=#…` — same id across turns ⇒ the same [InferenceChat]
+  ///     (and therefore the same underlying LiteRT-LM `Conversation` plus
+  ///     prefill cache) is being reused. A new id means we rebuilt — which
+  ///     should only happen on `resetSession()` or after a generation error.
+  ///   * `history=N` — should grow by 2 every turn (one user message + one
+  ///     model reply). If it stays at 0 across turns, flutter_gemma is
+  ///     dropping history; if it jumps back to 0 mid-conversation, the chat
+  ///     was torn down (look for an exception above the log line).
+  ///   * The `history=[…]` preview shows the actual messages the model
+  ///     sees on the next turn — confirming what context is being replayed.
+  void _logHistorySnapshot(
+    InferenceChat chat, {
+    required String label,
+    required String incoming,
+  }) {
+    if (!kDebugMode) return;
+    final history = chat.fullHistory;
+    final preview = history
+        .take(6)
+        .map((m) {
+          final who = m.isUser ? 'u' : 'a';
+          final text = m.text.replaceAll('\n', ' ');
+          final clipped =
+              text.length > 60 ? '${text.substring(0, 60)}…' : text;
+          return '$who:"$clipped"';
+        })
+        .join(', ');
+    final more = history.length > 6 ? ', …(+${history.length - 6})' : '';
+    final chatId = identityHashCode(chat).toRadixString(16);
+    final incomingClipped =
+        incoming.length > 60 ? '${incoming.substring(0, 60)}…' : incoming;
+    debugPrint(
+      '[LlmService] $label chat=#$chatId history=${history.length} '
+      'incoming="$incomingClipped" history=[$preview$more]',
+    );
+  }
+
+  /// Lazily build (or return the cached) chat for the active model.
+  /// Sampling params and the system prompt are baked in at chat-creation
+  /// time (forwarded to the underlying session) — keep them fixed across
+  /// the app, otherwise we'd lose the prefill cache benefit.
+  Future<InferenceChat> _ensureChat({required int maxTokens}) async {
+    final cached = _chat;
     if (cached != null) return cached;
     final model = await _ensureModel(maxTokens: maxTokens);
-    final session = await model.createSession(
+    final chat = await model.createChat(
       // Gemma's published defaults — temp=0.7 + topK=40 was making the
       // model collapse onto repeated `<unused3>` tokens because the
       // truncated probability mass left no escape from a degenerate loop.
@@ -198,7 +267,7 @@ class LlmService {
       temperature: 1.0,
       topK: 64,
       topP: 0.95,
-      // Thinking OFF for time-to-first-token. With `enableThinking: true`
+      // Thinking OFF for time-to-first-token. With `isThinking: true`
       // Gemma 4 IT decodes a full `<|channel>thought\n...<channel|>`
       // reasoning chain *before* the user-visible reply — measured at
       // 10-40s on-device, which is unusable for an emergency TTS loop.
@@ -207,29 +276,42 @@ class LlmService {
       // steps" instruction to give the user *externally* structured
       // guidance instead. The thinking-block scrubber stays in place as
       // a belt-and-suspenders safety net in case the model emits a
-      // thought header anyway (the SDK's docs warn that the
-      // `enableThinking` flag is "not reliable for all model bundles").
-      // Gallery's `BooleanSwitchConfig(key = ENABLE_THINKING,
-      // defaultValue = false)` agrees with this tradeoff.
-      enableThinking: false,
+      // thought header anyway (the SDK's docs warn that the thinking
+      // flag is "not reliable for all model bundles"). Gallery's
+      // `BooleanSwitchConfig(key = ENABLE_THINKING, defaultValue =
+      // false)` agrees with this tradeoff.
+      isThinking: false,
+      modelType: ModelType.gemmaIt,
       systemInstruction: _aegisSystemPrompt,
     );
-    _session = session;
-    return session;
+    _chat = chat;
+    if (kDebugMode) {
+      debugPrint(
+        '[LlmService] built new chat=#${identityHashCode(chat).toRadixString(16)} '
+        '(system prompt prefilling once for this conversation)',
+      );
+    }
+    return chat;
   }
 
-  /// Close the cached session and clear conversation history. The next
+  /// Close the cached chat and clear conversation history. The next
   /// [ask] / [askStream] will lazily build a fresh one. Use this between
   /// distinct user conversations so context from a prior emergency does
   /// not leak into a new one.
-  Future<void> resetSession() => _disposeSession();
+  Future<void> resetSession() => _disposeChat();
 
-  Future<void> _disposeSession() async {
-    final session = _session;
-    _session = null;
-    if (session != null) {
+  Future<void> _disposeChat() async {
+    final chat = _chat;
+    _chat = null;
+    if (chat != null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] dispose chat=#${identityHashCode(chat).toRadixString(16)} '
+          '(history=${chat.fullHistory.length} messages dropped)',
+        );
+      }
       try {
-        await session.close();
+        await chat.close();
       } on Object {
         // best-effort — the native conversation may already be torn down.
       }
@@ -392,9 +474,9 @@ class LlmService {
   }
 
   Future<void> _disposeModel() async {
-    // Sessions hold a native handle into the model — close them first so
-    // the LiteRT-LM Conversation is gone before the Engine is.
-    await _disposeSession();
+    // The chat owns a native session handle into the model — close it
+    // first so the LiteRT-LM Conversation is gone before the Engine is.
+    await _disposeChat();
     final model = _model;
     _model = null;
     if (model != null) {

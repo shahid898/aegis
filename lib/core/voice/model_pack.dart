@@ -18,10 +18,7 @@ enum ModelKind { tts, stt, llm }
 /// Paths are **relative to the extracted pack root**. Callers join them
 /// with the pack's install directory at runtime.
 class ModelFile {
-  const ModelFile({
-    required this.relativePath,
-    this.description,
-  });
+  const ModelFile({required this.relativePath, this.description});
 
   final String relativePath;
   final String? description;
@@ -117,6 +114,7 @@ class RegionModelPlan {
     required this.countryCode,
     required this.tts,
     required this.stt,
+    this.vad = const [],
     this.llm = const [],
   });
 
@@ -131,12 +129,18 @@ class RegionModelPlan {
   /// single multilingual Whisper-tiny pack that covers 99 languages.
   final List<VoiceModelPack> stt;
 
+  /// Voice Activity Detection packs (typically a single global Silero VAD
+  /// pack). VAD chunks the live mic stream into utterances so the
+  /// non-streaming Whisper recognizer can decode them turn-by-turn.
+  final List<VoiceModelPack> vad;
+
   /// On-device LLM packs (flutter_gemma `.task` bundles). Typically a
   /// single global pack shared across all regions.
   final List<VoiceModelPack> llm;
 
-  /// All packs flattened in install order (TTS first so the language
-  /// picker demo plays ASAP, then STT, then LLM last because it is the
-  /// largest asset).
-  List<VoiceModelPack> get all => [...tts, ...stt, ...llm];
+  /// All packs flattened in install order (VAD first because it's tiny
+  /// and lets us start segmenting audio immediately, then TTS so the
+  /// language picker demo plays ASAP, then STT, then LLM last because it
+  /// is the largest asset).
+  List<VoiceModelPack> get all => [...vad, ...tts, ...stt, ...llm];
 }

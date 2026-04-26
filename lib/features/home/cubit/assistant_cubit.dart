@@ -7,6 +7,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/model_catalog.dart';
+import '../../../core/voice/model_pack.dart';
 import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
 
@@ -73,11 +74,13 @@ class AssistantCubit extends Cubit<AssistantState> {
     required LlmService llm,
     required TtsService tts,
     required String countryCode,
+    String? languageCode,
   }) : _recorder = recorder,
        _stt = stt,
        _llm = llm,
        _tts = tts,
        _countryCode = countryCode,
+       _languageCode = languageCode,
        super(const AssistantState()) {
     _bootstrap();
   }
@@ -87,6 +90,7 @@ class AssistantCubit extends Cubit<AssistantState> {
   final LlmService _llm;
   final TtsService _tts;
   final String _countryCode;
+  final String? _languageCode;
 
   StreamSubscription<SttUpdate>? _sttSub;
   StreamSubscription<String>? _llmSub;
@@ -97,15 +101,30 @@ class AssistantCubit extends Cubit<AssistantState> {
     emit(state.copyWith(stage: AssistantStage.preparing));
     try {
       final plan = ModelCatalog.planFor(_countryCode);
-      final tts = plan.tts.isNotEmpty ? plan.tts.first : null;
-      final stt = plan.stt.isNotEmpty ? plan.stt.first : null;
+      // Pick packs that match the user's selected language, not just the
+      // first pack in the region plan. India's plan, for example, lists the
+      // Hindi voice first, but a user who picked English would otherwise
+      // hear the Hindi voice trying to phonemize English text — sounds
+      // foreign / wrong. The same applies to the streaming-vs-Whisper STT
+      // pick: Hindi speakers should land on Whisper-multilingual instead of
+      // the English-only Zipformer.
+      final tts = _preferredFor(plan.tts, _languageCode);
+      final stt = _preferredFor(plan.stt, _languageCode);
+      // VAD is global / language-agnostic: always pick the first pack.
+      // The plan should always include exactly one VAD pack today.
+      final vad = plan.vad.isNotEmpty ? plan.vad.first : null;
       final llm = plan.llm.isNotEmpty ? plan.llm.first : null;
 
       if (tts != null) _tts.load(tts).ignore();
       if (stt != null) _stt.setPack(stt);
+      if (vad != null) _stt.setVadPack(vad);
       if (llm != null) _llm.setPack(llm);
 
-      final sttOk = stt != null && await _stt.isAvailable();
+      // VAD is a hard prerequisite for streaming STT; without it
+      // transcribeStream() throws on the first frame, so we treat it as
+      // a degraded condition rather than letting the user discover the
+      // failure mid-conversation.
+      final sttOk = stt != null && vad != null && await _stt.isAvailable();
       final llmOk = llm != null && await _llm.isAvailable();
 
       if (!sttOk || !llmOk) {
@@ -383,6 +402,20 @@ class AssistantCubit extends Cubit<AssistantState> {
       await _llmSub?.cancel();
       _llmSub = null;
     }
+  }
+
+  /// Pick the first pack from [packs] whose [VoiceModelPack.languageCodes]
+  /// includes [langCode]. Falls back to `packs.first` when nothing matches
+  /// (or when the user hasn't picked a language yet). Returns null only on
+  /// an empty list.
+  VoiceModelPack? _preferredFor(List<VoiceModelPack> packs, String? langCode) {
+    if (packs.isEmpty) return null;
+    if (langCode == null || langCode.isEmpty) return packs.first;
+    final code = langCode.toLowerCase();
+    for (final pack in packs) {
+      if (pack.languageCodes.contains(code)) return pack;
+    }
+    return packs.first;
   }
 
   /// Index of the character *after* the last sentence-terminating

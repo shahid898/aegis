@@ -28,6 +28,7 @@ class HomePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final storage = sl<StorageService>();
     final countryCode = storage.selectedRegion?.countryCode ?? '';
+    final languageCode = storage.selectedLanguageCode;
 
     return BlocProvider<AssistantCubit>(
       create: (_) => AssistantCubit(
@@ -36,6 +37,7 @@ class HomePage extends StatelessWidget {
         llm: sl<LlmService>(),
         tts: sl<TtsService>(),
         countryCode: countryCode,
+        languageCode: languageCode,
       ),
       child: const _HomeView(),
     );

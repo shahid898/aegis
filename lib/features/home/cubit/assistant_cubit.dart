@@ -134,17 +134,29 @@ class AssistantCubit extends Cubit<AssistantState> {
       // foreign / wrong. The same applies to the streaming-vs-Whisper STT
       // pick: Hindi speakers should land on Whisper-multilingual instead of
       // the English-only Zipformer.
-      final tts = _preferredFor(plan.tts, _languageCode);
+      // Order TTS packs so the user's preferred language pack is first
+      // (becomes the script-ambiguous fallback inside TtsService) but EVERY
+      // pack in the region plan is loaded as a resident engine. Without
+      // this, a Hindi voice would have to phonemize English replies via
+      // espeak-ng-hi — the user perceived that as a "Spanish" accent.
+      final ttsPacks = _orderedTtsPacks(plan.tts, _languageCode);
       final stt = _preferredFor(plan.stt, _languageCode);
       // VAD is global / language-agnostic: always pick the first pack.
       // The plan should always include exactly one VAD pack today.
       final vad = plan.vad.isNotEmpty ? plan.vad.first : null;
       final llm = plan.llm.isNotEmpty ? plan.llm.first : null;
 
-      if (tts != null) _tts.load(tts).ignore();
+      if (ttsPacks.isNotEmpty) _tts.loadAll(ttsPacks).ignore();
       if (stt != null) _stt.setPack(stt);
       if (vad != null) _stt.setVadPack(vad);
-      if (llm != null) _llm.setPack(llm);
+      if (llm != null) {
+        _llm.setPack(llm);
+        // Pin Gemma's reply language to the user's selection so the model
+        // can't drift to English when the user is speaking Hindi (and
+        // vice-versa) — required for the multi-pack TTS routing above to
+        // pick the right voice consistently.
+        _llm.setPreferredLanguage(_languageCode);
+      }
 
       // VAD is a hard prerequisite for streaming STT; without it
       // transcribeStream() throws on the first frame, so we treat it as
@@ -479,6 +491,30 @@ class AssistantCubit extends Cubit<AssistantState> {
       if (pack.languageCodes.contains(code)) return pack;
     }
     return packs.first;
+  }
+
+  /// Return [packs] reordered so the pack that speaks [langCode] is first,
+  /// with the rest in their original order. The first pack becomes the
+  /// script-ambiguous fallback inside TtsService — keeping every pack in
+  /// the list means the engine bank gets fully populated for code-mixed
+  /// regions (India, Switzerland, UAE, etc.).
+  List<VoiceModelPack> _orderedTtsPacks(
+    List<VoiceModelPack> packs,
+    String? langCode,
+  ) {
+    if (packs.isEmpty) return const <VoiceModelPack>[];
+    if (langCode == null || langCode.isEmpty) return List.of(packs);
+    final code = langCode.toLowerCase();
+    final preferred = <VoiceModelPack>[];
+    final rest = <VoiceModelPack>[];
+    for (final pack in packs) {
+      if (pack.languageCodes.contains(code)) {
+        preferred.add(pack);
+      } else {
+        rest.add(pack);
+      }
+    }
+    return [...preferred, ...rest];
   }
 
   /// Index of the character *after* the last sentence-terminating

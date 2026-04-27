@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as so;
@@ -16,19 +17,35 @@ class _TtsClip {
   final int? speakerId;
 }
 
-/// Thin wrapper around sherpa-onnx `OfflineTts` with `just_audio` playback.
+/// Multi-pack TTS service backed by sherpa-onnx `OfflineTts` + `just_audio`.
 ///
-/// The service keeps **one** engine resident at a time — lightweight for a
-/// single-voice app. Switching voices calls `free()` on the previous
-/// engine before loading the new one.
+/// Each language ships its own VITS voice (Hindi `pratham`, English `lessac`,
+/// etc.). Loading just one pack means a Hindi-IT model would phonemize
+/// English replies via espeak-ng-hi — which is what the user perceived as
+/// "Spanish-sounding" output. The fix is to keep every pack in the region
+/// plan resident at once and pick the right engine per sentence.
+///
+/// Routing rule: count Devanagari / Arabic / CJK / Latin codepoints in the
+/// sentence, pick the loaded pack whose `languageCodes` contains the
+/// dominant script's ISO-639 code; fall back to the user-selected default
+/// pack when the sentence is script-ambiguous (numbers, punctuation only).
 class TtsService {
   TtsService(this._registry);
 
   final ModelRegistry _registry;
   final AudioPlayer _player = AudioPlayer();
 
-  so.OfflineTts? _engine;
-  VoiceModelPack? _loadedPack;
+  /// Engine bank keyed by [VoiceModelPack.id]. Holds one [so.OfflineTts]
+  /// per loaded pack so we can render a Hindi sentence through pratham
+  /// while the very next English sentence renders through lessac.
+  final Map<String, so.OfflineTts> _engines = <String, so.OfflineTts>{};
+  final Map<String, VoiceModelPack> _packs = <String, VoiceModelPack>{};
+
+  /// Pack chosen when language detection is ambiguous (digits, "OK",
+  /// punctuation only). Set on first load and updated on every subsequent
+  /// load — the most recently loaded pack wins, matching what the cubit
+  /// passes in (the user's selected language).
+  VoiceModelPack? _defaultPack;
   bool _bindingsInitialized = false;
 
   /// Queue of synthesis-then-play jobs. Each [enqueue] adds one clip and
@@ -39,25 +56,61 @@ class TtsService {
   bool _stopRequested = false;
   int _wavCounter = 0;
 
+  /// True if at least one engine is loaded — callers use this as a cheap
+  /// readiness probe before queueing speech.
+  bool get isReady => _engines.isNotEmpty;
+
+  /// Load every [pack] in [packs] that's installed on disk. Skipped if
+  /// already loaded; missing packs are silently ignored (not an error —
+  /// downloads may still be in flight). Returns the number of newly loaded
+  /// engines.
+  Future<int> loadAll(List<VoiceModelPack> packs) async {
+    var loaded = 0;
+    for (final pack in packs) {
+      final ok = await load(pack, makeDefault: false);
+      if (ok) loaded++;
+    }
+    // First pack in the list is treated as the user's preferred default —
+    // matches the order produced by `_preferredFor()` in assistant_cubit
+    // (preferred-language pack first, fallback packs after).
+    if (packs.isNotEmpty) {
+      final preferred = packs.first;
+      if (_engines.containsKey(preferred.id)) {
+        _defaultPack = preferred;
+      }
+    }
+    return loaded;
+  }
+
   /// Load the engine for [pack] if not already loaded. Returns `false`
   /// when the pack is not installed on disk (caller should fall back to
   /// degraded UX — e.g. skip sample playback).
-  Future<bool> load(VoiceModelPack pack) async {
+  ///
+  /// When [makeDefault] is true, this pack becomes the fallback engine
+  /// for script-ambiguous sentences.
+  Future<bool> load(VoiceModelPack pack, {bool makeDefault = true}) async {
     if (pack.kind != ModelKind.tts) {
-      throw ArgumentError('TtsService.load requires a TTS pack, got ${pack.id}');
+      throw ArgumentError(
+        'TtsService.load requires a TTS pack, got ${pack.id}',
+      );
     }
-    if (_loadedPack?.id == pack.id && _engine != null) return true;
+    if (_engines.containsKey(pack.id)) {
+      if (makeDefault) _defaultPack = pack;
+      return true;
+    }
     if (!await _registry.isInstalled(pack)) return false;
 
     _ensureBindings();
 
     final modelPath = await _registry.absolutePath(pack, pack.modelFile);
-    final tokensPath = pack.tokensFile == null
-        ? ''
-        : await _registry.absolutePath(pack, pack.tokensFile!);
-    final lexiconPath = pack.lexiconFile == null
-        ? ''
-        : await _registry.absolutePath(pack, pack.lexiconFile!);
+    final tokensPath =
+        pack.tokensFile == null
+            ? ''
+            : await _registry.absolutePath(pack, pack.tokensFile!);
+    final lexiconPath =
+        pack.lexiconFile == null
+            ? ''
+            : await _registry.absolutePath(pack, pack.lexiconFile!);
     final dataDir = await _registry.dataDirPath(pack) ?? '';
 
     final config = so.OfflineTtsConfig(
@@ -73,20 +126,25 @@ class TtsService {
       ),
     );
 
-    await _disposeEngine();
-    _engine = so.OfflineTts(config);
-    _loadedPack = pack;
+    final engine = so.OfflineTts(config);
+    _engines[pack.id] = engine;
+    _packs[pack.id] = pack;
+    if (makeDefault || _defaultPack == null) {
+      _defaultPack = pack;
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '[TtsService] loaded engine pack=${pack.id} '
+        'languages=${pack.languageCodes} (${_engines.length} resident)',
+      );
+    }
     return true;
   }
 
   /// Generate audio for [text] and play it. Awaits the *entire* clip —
   /// synthesis + playback to natural completion. Use this only when the
   /// caller wants strict turn-taking; for streaming UIs prefer [enqueue].
-  Future<void> speak(
-    String text, {
-    double speed = 1.0,
-    int? speakerId,
-  }) {
+  Future<void> speak(String text, {double speed = 1.0, int? speakerId}) {
     return enqueue(text, speed: speed, speakerId: speakerId);
   }
 
@@ -96,14 +154,8 @@ class TtsService {
   /// The cubit calls this once per sentence as the LLM streams tokens, so
   /// the user hears the start of the answer while the model is still
   /// decoding the rest. The worker keeps order and never overlaps clips.
-  Future<void> enqueue(
-    String text, {
-    double speed = 1.0,
-    int? speakerId,
-  }) {
-    final pack = _loadedPack;
-    final engine = _engine;
-    if (pack == null || engine == null) {
+  Future<void> enqueue(String text, {double speed = 1.0, int? speakerId}) {
+    if (_engines.isEmpty || _defaultPack == null) {
       throw StateError('TtsService.enqueue called before load() succeeded');
     }
     final trimmed = text.trim();
@@ -167,9 +219,9 @@ class TtsService {
   }
 
   Future<void> _renderAndPlay(_TtsClip clip) async {
-    final pack = _loadedPack;
-    final engine = _engine;
-    if (pack == null || engine == null) return;
+    final pack = _routePack(clip.text);
+    final engine = _engines[pack.id];
+    if (engine == null) return;
 
     final audio = engine.generate(
       text: clip.text,
@@ -200,7 +252,7 @@ class TtsService {
 
   Future<void> dispose() async {
     await _player.dispose();
-    await _disposeEngine();
+    await _disposeAll();
   }
 
   // ---- internals ----------------------------------------------------------
@@ -211,11 +263,14 @@ class TtsService {
     _bindingsInitialized = true;
   }
 
-  Future<void> _disposeEngine() async {
-    final engine = _engine;
-    _engine = null;
-    _loadedPack = null;
-    engine?.free();
+  Future<void> _disposeAll() async {
+    final engines = List.of(_engines.values);
+    _engines.clear();
+    _packs.clear();
+    _defaultPack = null;
+    for (final engine in engines) {
+      engine.free();
+    }
   }
 
   Future<String> _nextWavPath(VoiceModelPack pack) async {
@@ -228,5 +283,123 @@ class TtsService {
     // hasn't finished but also don't grow the cache unboundedly.
     final slot = _wavCounter++ & 7;
     return '${dir.path}/${pack.id}-$slot.wav';
+  }
+
+  /// Pick the loaded pack whose voice best matches [text]. Falls back to
+  /// the default pack when no script signal is present (digits, lone "OK").
+  VoiceModelPack _routePack(String text) {
+    final detected = _detectLanguage(text);
+    if (detected != null) {
+      for (final pack in _packs.values) {
+        if (pack.languageCodes.contains(detected)) return pack;
+      }
+    }
+    return _defaultPack ?? _packs.values.first;
+  }
+
+  /// Returns an ISO-639 code (`hi`, `ar`, `zh`, `ja`, `en`, `ru`, ...) for
+  /// the dominant script in [text], or `null` if the text has no script
+  /// signal at all. Cheap O(n) codepoint scan — we don't need full Unicode
+  /// segmentation, just enough to disambiguate "Hindi reply with English
+  /// proper nouns" from "English reply with a Hindi loanword".
+  ///
+  /// Threshold: a script needs at least one codepoint *and* at least 30%
+  /// of the alphabetic codepoints to claim the sentence. Otherwise we tie-
+  /// break by the highest count, falling back to Latin → English.
+  String? _detectLanguage(String text) {
+    var devanagari = 0;
+    var bengali = 0;
+    var gurmukhi = 0;
+    var gujarati = 0;
+    var tamil = 0;
+    var telugu = 0;
+    var kannada = 0;
+    var malayalam = 0;
+    var arabic = 0;
+    var cyrillic = 0;
+    var greek = 0;
+    var hebrew = 0;
+    var thai = 0;
+    var hangul = 0;
+    var hiragana = 0;
+    var katakana = 0;
+    var cjk = 0;
+    var latin = 0;
+
+    for (final rune in text.runes) {
+      if (rune >= 0x0900 && rune <= 0x097F) {
+        devanagari++;
+      } else if (rune >= 0x0980 && rune <= 0x09FF) {
+        bengali++;
+      } else if (rune >= 0x0A00 && rune <= 0x0A7F) {
+        gurmukhi++;
+      } else if (rune >= 0x0A80 && rune <= 0x0AFF) {
+        gujarati++;
+      } else if (rune >= 0x0B80 && rune <= 0x0BFF) {
+        tamil++;
+      } else if (rune >= 0x0C00 && rune <= 0x0C7F) {
+        telugu++;
+      } else if (rune >= 0x0C80 && rune <= 0x0CFF) {
+        kannada++;
+      } else if (rune >= 0x0D00 && rune <= 0x0D7F) {
+        malayalam++;
+      } else if (rune >= 0x0600 && rune <= 0x06FF) {
+        arabic++;
+      } else if (rune >= 0x0400 && rune <= 0x04FF) {
+        cyrillic++;
+      } else if (rune >= 0x0370 && rune <= 0x03FF) {
+        greek++;
+      } else if (rune >= 0x0590 && rune <= 0x05FF) {
+        hebrew++;
+      } else if (rune >= 0x0E00 && rune <= 0x0E7F) {
+        thai++;
+      } else if (rune >= 0xAC00 && rune <= 0xD7AF) {
+        hangul++;
+      } else if (rune >= 0x3040 && rune <= 0x309F) {
+        hiragana++;
+      } else if (rune >= 0x30A0 && rune <= 0x30FF) {
+        katakana++;
+      } else if (rune >= 0x4E00 && rune <= 0x9FFF) {
+        cjk++;
+      } else if ((rune >= 0x0041 && rune <= 0x005A) ||
+          (rune >= 0x0061 && rune <= 0x007A)) {
+        latin++;
+      }
+    }
+
+    final scores = <String, int>{
+      'hi': devanagari,
+      'bn': bengali,
+      'pa': gurmukhi,
+      'gu': gujarati,
+      'ta': tamil,
+      'te': telugu,
+      'kn': kannada,
+      'ml': malayalam,
+      'ar': arabic,
+      'ru': cyrillic,
+      'el': greek,
+      'he': hebrew,
+      'th': thai,
+      'ko': hangul,
+      'ja': hiragana + katakana,
+      'zh': cjk,
+      'en': latin,
+    };
+
+    String? best;
+    var bestCount = 0;
+    scores.forEach((lang, count) {
+      if (count > bestCount) {
+        bestCount = count;
+        best = lang;
+      }
+    });
+    if (bestCount == 0) return null;
+
+    // Japanese kana sit inside the same CJK block range used for Chinese —
+    // if we saw ANY kana, this is Japanese, not Chinese.
+    if ((hiragana + katakana) > 0) return 'ja';
+    return best;
   }
 }

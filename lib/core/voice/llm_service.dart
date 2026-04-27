@@ -40,10 +40,45 @@ final RegExp _thinkBlockRegex = RegExp(
   dotAll: true,
 );
 
+/// ISO-639 → human-readable name. Injected into the system prompt so we
+/// can pin Gemma's reply language without hoping the model auto-detects
+/// from a short utterance (it routinely doesn't on noisy audio). Only the
+/// languages we actually ship a TTS voice for are listed — anything else
+/// falls back to the generic "match the user" rule.
+const Map<String, String> _languageNames = {
+  'en': 'English',
+  'hi': 'Hindi',
+  'bn': 'Bengali',
+  'gu': 'Gujarati',
+  'pa': 'Punjabi',
+  'ta': 'Tamil',
+  'te': 'Telugu',
+  'kn': 'Kannada',
+  'ml': 'Malayalam',
+  'mr': 'Marathi',
+  'ur': 'Urdu',
+  'ar': 'Arabic',
+  'es': 'Spanish',
+  'pt': 'Portuguese',
+  'fr': 'French',
+  'de': 'German',
+  'it': 'Italian',
+  'ru': 'Russian',
+  'tr': 'Turkish',
+  'zh': 'Chinese',
+  'ja': 'Japanese',
+  'ko': 'Korean',
+  'id': 'Indonesian',
+  'vi': 'Vietnamese',
+  'th': 'Thai',
+};
+
 /// Emergency-assistant system prompt shared by every session. Kept short
 /// because Gemma 3n context is precious and emergency answers must stay
-/// terse and actionable.
-const String _aegisSystemPrompt = '''
+/// terse and actionable. The `{language}` placeholder is filled at chat-
+/// build time with the user's selected language so the model never drifts
+/// from the voice the TTS bank is set up to speak.
+const String _aegisSystemPromptTemplate = '''
 You are Aegis, an offline emergency assistant. The user may be injured, in
 danger, or trying to help someone who is. Follow these rules on every turn:
 
@@ -53,9 +88,21 @@ danger, or trying to help someone who is. Follow these rules on every turn:
    numbered steps when giving first-aid instructions.
 3. Never invent locations, phone numbers, or medical facts. If you do not
    know, say so and suggest calling emergency services.
-4. Reply in the same language the user spoke.
+4. {language_rule}
 5. Keep responses under 120 words unless the user explicitly asks for more.
 ''';
+
+String _buildSystemPrompt(String? languageCode) {
+  final code = languageCode?.toLowerCase();
+  final name = code == null ? null : _languageNames[code];
+  final rule =
+      name == null
+          ? 'Reply in the same language the user spoke.'
+          : 'Always reply in $name. Do not switch to any other language even '
+              'if the user mixes English words. Use the native script for '
+              '$name (not romanized text).';
+  return _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
+}
 
 /// Wraps flutter_gemma's modern API so the rest of the app can treat the
 /// LLM as a simple text-in/text-out service.
@@ -106,6 +153,7 @@ class LlmService {
   InferenceChat? _chat;
   bool _installed = false;
   Future<void>? _loadFuture;
+  String? _preferredLanguage;
 
   /// The backend we'll try next time we (re)load the model. We start on GPU
   /// because real Adreno/Mali phones can run the WebGPU executor + OpenCL
@@ -129,6 +177,21 @@ class LlmService {
     _installed = false;
     _loadFuture = null;
     unawaited(_disposeModel());
+  }
+
+  /// Pin Gemma's reply language. The supplied ISO-639 code is baked into
+  /// the system prompt the next time a chat is built. Pass `null` to fall
+  /// back to "match the user" auto-detection. Changing the language tears
+  /// down the cached chat so the new system prompt actually takes effect
+  /// (the prompt is prefilled at chat creation time, not per turn).
+  void setPreferredLanguage(String? languageCode) {
+    final normalized =
+        (languageCode == null || languageCode.isEmpty)
+            ? null
+            : languageCode.toLowerCase();
+    if (_preferredLanguage == normalized) return;
+    _preferredLanguage = normalized;
+    unawaited(_disposeChat());
   }
 
   /// True if the currently-bound pack is installed on disk.
@@ -232,8 +295,7 @@ class LlmService {
         .map((m) {
           final who = m.isUser ? 'u' : 'a';
           final text = m.text.replaceAll('\n', ' ');
-          final clipped =
-              text.length > 60 ? '${text.substring(0, 60)}…' : text;
+          final clipped = text.length > 60 ? '${text.substring(0, 60)}…' : text;
           return '$who:"$clipped"';
         })
         .join(', ');
@@ -282,7 +344,7 @@ class LlmService {
       // false)` agrees with this tradeoff.
       isThinking: false,
       modelType: ModelType.gemmaIt,
-      systemInstruction: _aegisSystemPrompt,
+      systemInstruction: _buildSystemPrompt(_preferredLanguage),
     );
     _chat = chat;
     if (kDebugMode) {

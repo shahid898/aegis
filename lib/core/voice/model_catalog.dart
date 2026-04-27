@@ -16,35 +16,42 @@ class ModelCatalog {
   ModelCatalog._();
 
   // ---------------------------------------------------------------------------
-  // STT: one multilingual Whisper-tiny-int8 pack covers 99 languages.
+  // STT: one multilingual Whisper-base-int8 pack covers 99 languages.
   //   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/
-  //   sherpa-onnx-whisper-tiny.tar.bz2
-  // ~75 MB download, ~170 MB extracted (int8 encoder + decoder).
+  //   sherpa-onnx-whisper-base.tar.bz2
+  // ~145 MB download, ~290 MB extracted (int8 encoder + decoder).
   //
   // Whisper is non-streaming, so we feed it segmented audio produced by the
   // Silero VAD pack below. That gives Whisper-grade accuracy with snappy
   // turn-taking — VAD detects when the user starts/stops talking on the
   // live mic stream, and Whisper decodes each detected segment immediately.
   //
+  // We started on Whisper-tiny (~75 MB) but it has prohibitive WER on Hindi
+  // and other non-English languages — short utterances were either dropped
+  // or auto-detected as the wrong language. Upgrading to base nearly halves
+  // the WER on every multilingual benchmark while keeping the on-device
+  // download under 200 MB. The price (~70 MB extra) is well worth the
+  // jump from "unusable in Hindi" to "transcribes natural speech".
+  //
   // We previously shipped a streaming Zipformer for English (~340 MB,
   // GigaSpeech-trained, ALL-CAPS output, weak on Indian-English casual
-  // speech). VAD-gated Whisper proved more accurate at a fraction of the
-  // download size — Whisper alone replaces both backends.
+  // speech). VAD-gated Whisper-base replaces both backends with substantial
+  // accuracy gains and a smaller total footprint.
   // ---------------------------------------------------------------------------
-  static const VoiceModelPack _whisperTinyMultilingual = VoiceModelPack(
-    id: 'stt-whisper-tiny',
+  static const VoiceModelPack _whisperBaseMultilingual = VoiceModelPack(
+    id: 'stt-whisper-base',
     kind: ModelKind.stt,
-    displayName: 'Speech recognition (multilingual)',
+    displayName: 'Speech recognition (multilingual, high accuracy)',
     languageCodes: _whisperLanguages,
     archiveUrl:
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2',
+        'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2',
     archiveSha256: '',
-    approxBytes: 180 * 1024 * 1024,
-    rootDirName: 'sherpa-onnx-whisper-tiny',
-    modelFile: ModelFile(relativePath: 'tiny-encoder.int8.onnx'),
-    encoderFile: ModelFile(relativePath: 'tiny-encoder.int8.onnx'),
-    decoderFile: ModelFile(relativePath: 'tiny-decoder.int8.onnx'),
-    tokensFile: ModelFile(relativePath: 'tiny-tokens.txt'),
+    approxBytes: 300 * 1024 * 1024,
+    rootDirName: 'sherpa-onnx-whisper-base',
+    modelFile: ModelFile(relativePath: 'base-encoder.int8.onnx'),
+    encoderFile: ModelFile(relativePath: 'base-encoder.int8.onnx'),
+    decoderFile: ModelFile(relativePath: 'base-decoder.int8.onnx'),
+    tokensFile: ModelFile(relativePath: 'base-tokens.txt'),
   );
 
   // ---------------------------------------------------------------------------
@@ -309,11 +316,12 @@ class ModelCatalog {
 
   static const _fallbackTts = _ttsPiperEnUsLessac;
 
-  // Every region uses the same multilingual Whisper-tiny pack — VAD chunks
+  // Every region uses the same multilingual Whisper-base pack — VAD chunks
   // the live mic stream into segments so Whisper can decode them in real
-  // time without a per-language streaming model. Keeps the on-device
-  // download under 200 MB for STT regardless of region.
-  static const _sttAll = <VoiceModelPack>[_whisperTinyMultilingual];
+  // time without a per-language streaming model. Whisper-base nearly halves
+  // the WER vs tiny across every language we ship for, at the cost of an
+  // extra ~70 MB of download — required for usable Hindi recognition.
+  static const _sttAll = <VoiceModelPack>[_whisperBaseMultilingual];
 
   static final Map<String, RegionModelPlan> _byCountry = {
     // South Asia (English is widely used as a second language — ship the

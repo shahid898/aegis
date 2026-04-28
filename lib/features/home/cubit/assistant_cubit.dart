@@ -140,14 +140,12 @@ class AssistantCubit extends Cubit<AssistantState> {
       // this, a Hindi voice would have to phonemize English replies via
       // espeak-ng-hi — the user perceived that as a "Spanish" accent.
       final ttsPacks = _orderedTtsPacks(plan.tts, _languageCode);
-      final stt = _preferredFor(plan.stt, _languageCode);
       // VAD is global / language-agnostic: always pick the first pack.
       // The plan should always include exactly one VAD pack today.
       final vad = plan.vad.isNotEmpty ? plan.vad.first : null;
       final llm = plan.llm.isNotEmpty ? plan.llm.first : null;
 
       if (ttsPacks.isNotEmpty) _tts.loadAll(ttsPacks).ignore();
-      if (stt != null) _stt.setPack(stt);
       if (vad != null) _stt.setVadPack(vad);
       if (llm != null) {
         _llm.setPack(llm);
@@ -158,11 +156,9 @@ class AssistantCubit extends Cubit<AssistantState> {
         _llm.setPreferredLanguage(_languageCode);
       }
 
-      // VAD is a hard prerequisite for streaming STT; without it
-      // transcribeStream() throws on the first frame, so we treat it as
-      // a degraded condition rather than letting the user discover the
-      // failure mid-conversation.
-      final sttOk = stt != null && vad != null && await _stt.isAvailable();
+      // Gemma 4 handles transcription natively; only the VAD pack (Silero,
+      // ~2 MB) must be installed for the streaming pipeline to start.
+      final sttOk = vad != null && await _stt.isAvailable();
       final llmOk = llm != null && await _llm.isAvailable();
 
       if (!sttOk || !llmOk) {
@@ -477,20 +473,6 @@ class AssistantCubit extends Cubit<AssistantState> {
       await _llmSub?.cancel();
       _llmSub = null;
     }
-  }
-
-  /// Pick the first pack from [packs] whose [VoiceModelPack.languageCodes]
-  /// includes [langCode]. Falls back to `packs.first` when nothing matches
-  /// (or when the user hasn't picked a language yet). Returns null only on
-  /// an empty list.
-  VoiceModelPack? _preferredFor(List<VoiceModelPack> packs, String? langCode) {
-    if (packs.isEmpty) return null;
-    if (langCode == null || langCode.isEmpty) return packs.first;
-    final code = langCode.toLowerCase();
-    for (final pack in packs) {
-      if (pack.languageCodes.contains(code)) return pack;
-    }
-    return packs.first;
   }
 
   /// Return [packs] reordered so the pack that speaks [langCode] is first,

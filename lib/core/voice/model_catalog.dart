@@ -16,45 +16,6 @@ class ModelCatalog {
   ModelCatalog._();
 
   // ---------------------------------------------------------------------------
-  // STT: one multilingual Whisper-base-int8 pack covers 99 languages.
-  //   https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/
-  //   sherpa-onnx-whisper-base.tar.bz2
-  // ~145 MB download, ~290 MB extracted (int8 encoder + decoder).
-  //
-  // Whisper is non-streaming, so we feed it segmented audio produced by the
-  // Silero VAD pack below. That gives Whisper-grade accuracy with snappy
-  // turn-taking — VAD detects when the user starts/stops talking on the
-  // live mic stream, and Whisper decodes each detected segment immediately.
-  //
-  // We started on Whisper-tiny (~75 MB) but it has prohibitive WER on Hindi
-  // and other non-English languages — short utterances were either dropped
-  // or auto-detected as the wrong language. Upgrading to base nearly halves
-  // the WER on every multilingual benchmark while keeping the on-device
-  // download under 200 MB. The price (~70 MB extra) is well worth the
-  // jump from "unusable in Hindi" to "transcribes natural speech".
-  //
-  // We previously shipped a streaming Zipformer for English (~340 MB,
-  // GigaSpeech-trained, ALL-CAPS output, weak on Indian-English casual
-  // speech). VAD-gated Whisper-base replaces both backends with substantial
-  // accuracy gains and a smaller total footprint.
-  // ---------------------------------------------------------------------------
-  static const VoiceModelPack _whisperBaseMultilingual = VoiceModelPack(
-    id: 'stt-whisper-base',
-    kind: ModelKind.stt,
-    displayName: 'Speech recognition (multilingual, high accuracy)',
-    languageCodes: _whisperLanguages,
-    archiveUrl:
-        'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2',
-    archiveSha256: '',
-    approxBytes: 300 * 1024 * 1024,
-    rootDirName: 'sherpa-onnx-whisper-base',
-    modelFile: ModelFile(relativePath: 'base-encoder.int8.onnx'),
-    encoderFile: ModelFile(relativePath: 'base-encoder.int8.onnx'),
-    decoderFile: ModelFile(relativePath: 'base-decoder.int8.onnx'),
-    tokensFile: ModelFile(relativePath: 'base-tokens.txt'),
-  );
-
-  // ---------------------------------------------------------------------------
   // VAD: Silero v5 voice activity detector. Single ~2 MB onnx file fetched
   // directly (no archive). The VAD listens to the mic and emits speech
   // segments to feed into Whisper.
@@ -71,7 +32,7 @@ class ModelCatalog {
     displayName: 'Voice activity detector',
     // VAD is language-agnostic; list the most common codes so the
     // language-aware pack picker won't reject it.
-    languageCodes: _whisperLanguages,
+    languageCodes: _allLanguageCodes,
     archiveUrl:
         'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx',
     archiveSha256: '',
@@ -310,18 +271,11 @@ class ModelCatalog {
   static VoiceModelPack get vadPack => _sileroVad;
 
   // ---------------------------------------------------------------------------
-  // Country → plan. Fallback is US English + multilingual STT. Every plan
-  // includes the same STT pack (one global model) and the same LLM pack.
+  // Country → plan. Transcription is handled by Gemma 4's native audio
+  // modality, so no separate STT pack is needed — stt: is always empty.
   // ---------------------------------------------------------------------------
 
   static const _fallbackTts = _ttsPiperEnUsLessac;
-
-  // Every region uses the same multilingual Whisper-base pack — VAD chunks
-  // the live mic stream into segments so Whisper can decode them in real
-  // time without a per-language streaming model. Whisper-base nearly halves
-  // the WER vs tiny across every language we ship for, at the cost of an
-  // extra ~70 MB of download — required for usable Hindi recognition.
-  static const _sttAll = <VoiceModelPack>[_whisperBaseMultilingual];
 
   static final Map<String, RegionModelPlan> _byCountry = {
     // South Asia (English is widely used as a second language — ship the
@@ -330,35 +284,35 @@ class ModelCatalog {
     'IN': RegionModelPlan(
       countryCode: 'IN',
       tts: const [_ttsPiperHiInPratham, _ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'PK': RegionModelPlan(
       countryCode: 'PK',
       tts: const [_ttsPiperHiInPratham, _ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'BD': RegionModelPlan(
       countryCode: 'BD',
       tts: const [_ttsPiperHiInPratham, _ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'LK': RegionModelPlan(
       countryCode: 'LK',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'NP': RegionModelPlan(
       countryCode: 'NP',
       tts: const [_ttsPiperHiInPratham, _ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -367,84 +321,84 @@ class ModelCatalog {
     'US': RegionModelPlan(
       countryCode: 'US',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'CA': RegionModelPlan(
       countryCode: 'CA',
       tts: const [_ttsPiperEnUsLessac, _ttsPiperFrFrSiwis],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'GB': RegionModelPlan(
       countryCode: 'GB',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'AU': RegionModelPlan(
       countryCode: 'AU',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'NZ': RegionModelPlan(
       countryCode: 'NZ',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'IE': RegionModelPlan(
       countryCode: 'IE',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'SG': RegionModelPlan(
       countryCode: 'SG',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'MY': RegionModelPlan(
       countryCode: 'MY',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'PH': RegionModelPlan(
       countryCode: 'PH',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'ZA': RegionModelPlan(
       countryCode: 'ZA',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'KE': RegionModelPlan(
       countryCode: 'KE',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'NG': RegionModelPlan(
       countryCode: 'NG',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -453,77 +407,77 @@ class ModelCatalog {
     'DE': RegionModelPlan(
       countryCode: 'DE',
       tts: const [_ttsPiperDeDeThorsten],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'AT': RegionModelPlan(
       countryCode: 'AT',
       tts: const [_ttsPiperDeDeThorsten],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'CH': RegionModelPlan(
       countryCode: 'CH',
       tts: const [_ttsPiperDeDeThorsten, _ttsPiperFrFrSiwis],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'FR': RegionModelPlan(
       countryCode: 'FR',
       tts: const [_ttsPiperFrFrSiwis],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'BE': RegionModelPlan(
       countryCode: 'BE',
       tts: const [_ttsPiperFrFrSiwis],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'NL': RegionModelPlan(
       countryCode: 'NL',
       tts: const [_ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'ES': RegionModelPlan(
       countryCode: 'ES',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'IT': RegionModelPlan(
       countryCode: 'IT',
       tts: const [_ttsPiperItItRiccardo],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'PT': RegionModelPlan(
       countryCode: 'PT',
       tts: const [_ttsPiperPtBrFaber],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'RU': RegionModelPlan(
       countryCode: 'RU',
       tts: const [_ttsPiperRuRuDenis],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'TR': RegionModelPlan(
       countryCode: 'TR',
       tts: const [_ttsPiperTrTrDfki],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -532,42 +486,42 @@ class ModelCatalog {
     'MX': RegionModelPlan(
       countryCode: 'MX',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'AR': RegionModelPlan(
       countryCode: 'AR',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'CO': RegionModelPlan(
       countryCode: 'CO',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'CL': RegionModelPlan(
       countryCode: 'CL',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'PE': RegionModelPlan(
       countryCode: 'PE',
       tts: const [_ttsPiperEsEsDavefx],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'BR': RegionModelPlan(
       countryCode: 'BR',
       tts: const [_ttsPiperPtBrFaber],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -576,42 +530,42 @@ class ModelCatalog {
     'AE': RegionModelPlan(
       countryCode: 'AE',
       tts: const [_ttsPiperArJoXkadir, _ttsPiperEnGbAlan],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'SA': RegionModelPlan(
       countryCode: 'SA',
       tts: const [_ttsPiperArJoXkadir],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'EG': RegionModelPlan(
       countryCode: 'EG',
       tts: const [_ttsPiperArJoXkadir],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'JO': RegionModelPlan(
       countryCode: 'JO',
       tts: const [_ttsPiperArJoXkadir],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'QA': RegionModelPlan(
       countryCode: 'QA',
       tts: const [_ttsPiperArJoXkadir],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'KW': RegionModelPlan(
       countryCode: 'KW',
       tts: const [_ttsPiperArJoXkadir],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -620,42 +574,42 @@ class ModelCatalog {
     'CN': RegionModelPlan(
       countryCode: 'CN',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'JP': RegionModelPlan(
       countryCode: 'JP',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'KR': RegionModelPlan(
       countryCode: 'KR',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'ID': RegionModelPlan(
       countryCode: 'ID',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'TH': RegionModelPlan(
       countryCode: 'TH',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
     'VN': RegionModelPlan(
       countryCode: 'VN',
       tts: const [_ttsPiperEnUsLessac],
-      stt: _sttAll,
+      stt: const [],
       vad: _vadAll,
       llm: _llmAll,
     ),
@@ -670,7 +624,7 @@ class ModelCatalog {
     return const RegionModelPlan(
       countryCode: '',
       tts: [_fallbackTts],
-      stt: _sttAll,
+      stt: [],
       vad: _vadAll,
       llm: _llmAll,
     );
@@ -700,8 +654,9 @@ class ModelCatalog {
   }
 }
 
-/// ISO-639 codes supported by Whisper-tiny multilingual.
-const List<String> _whisperLanguages = [
+/// ISO-639 codes the app supports. Used by the VAD pack picker so the
+/// language-aware selector doesn't reject the language-agnostic VAD.
+const List<String> _allLanguageCodes = [
   'af',
   'am',
   'ar',

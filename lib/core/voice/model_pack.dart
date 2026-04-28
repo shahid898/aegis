@@ -88,7 +88,7 @@ class VoiceModelPack {
   /// espeak-ng data directory, required by Piper TTS.
   final String? dataDirName;
 
-  // -- Whisper / Zipformer parts (optional) -------------------------------
+  // -- Optional extra model files (sherpa-onnx multi-file models) ----------
   final ModelFile? encoderFile;
   final ModelFile? decoderFile;
   final ModelFile? joinerFile;
@@ -125,8 +125,8 @@ class RegionModelPlan {
   /// match for the likely primary language).
   final List<VoiceModelPack> tts;
 
-  /// STT packs for this region. For maximum coverage we currently ship a
-  /// single multilingual Whisper-tiny pack that covers 99 languages.
+  /// STT packs for this region. Empty since Gemma 4 handles transcription
+  /// natively; kept for schema compatibility.
   final List<VoiceModelPack> stt;
 
   /// Voice Activity Detection packs (typically a single global Silero VAD
@@ -138,9 +138,8 @@ class RegionModelPlan {
   /// single global pack shared across all regions.
   final List<VoiceModelPack> llm;
 
-  /// All packs flattened in install order (VAD first because it's tiny
-  /// and lets us start segmenting audio immediately, then TTS so the
-  /// language picker demo plays ASAP, then STT, then LLM last because it
-  /// is the largest asset).
+  /// All packs flattened in install order (VAD first because it's tiny,
+  /// then TTS so the language picker demo plays ASAP, then LLM last because
+  /// it is the largest asset).
   List<VoiceModelPack> get all => [...vad, ...tts, ...stt, ...llm];
 }

@@ -201,6 +201,55 @@ class LlmService {
     return _registry.isInstalled(pack);
   }
 
+  /// Transcribe [wavBytes] (a 16 kHz mono IEEE-float32 WAV file) to text
+  /// using Gemma 4's native audio modality. Creates a one-shot session so
+  /// the transcription request never pollutes the ongoing chat history.
+  ///
+  /// Returns empty string if the model produces no output or the audio was
+  /// silent. Throws if the model is not yet loaded.
+  Future<String> transcribeAudio(
+    Uint8List wavBytes, {
+    String? language,
+  }) async {
+    try {
+      return await _transcribeOnce(wavBytes, language: language);
+    } on Object catch (e) {
+      if (!await _shouldFallbackToCpu(e)) rethrow;
+      return _transcribeOnce(wavBytes, language: language);
+    }
+  }
+
+  Future<String> _transcribeOnce(
+    Uint8List wavBytes, {
+    String? language,
+  }) async {
+    final model = await _ensureModel(maxTokens: 512);
+    final prompt = _buildAsrPrompt(language);
+    final session = await model.createSession(
+      temperature: 0.0,
+      randomSeed: 1,
+      topK: 1,
+      enableAudioModality: true,
+    );
+    try {
+      await session.addQueryChunk(
+        Message.withAudio(text: prompt, audioBytes: wavBytes, isUser: true),
+      );
+      final response = await session.getResponse();
+      return _sanitizeFinalResponse(response).trim();
+    } finally {
+      // Sessions are not reused for transcription — each segment is
+      // independent, and keeping sessions alive would leak native memory.
+    }
+  }
+
+  String _buildAsrPrompt(String? language) {
+    final name =
+        language == null ? null : _languageNames[language.toLowerCase()];
+    if (name != null) return 'Transcribe the speech in this audio into $name.';
+    return 'Transcribe the speech in this audio recording.';
+  }
+
   /// Generate a full response for [userText]. Blocks until generation
   /// finishes — prefer [askStream] for a responsive UI.
   Future<String> ask(String userText, {int maxTokens = 1024}) async {
@@ -508,6 +557,7 @@ class LlmService {
       final model = await FlutterGemma.getActiveModel(
         maxTokens: maxTokens,
         preferredBackend: _preferredBackend,
+        supportAudio: true,
       );
       _model = model;
       completer.complete();

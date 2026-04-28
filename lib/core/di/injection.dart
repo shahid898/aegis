@@ -33,6 +33,13 @@ Future<void> configureDependencies() async {
   // Voice services are lazy — engines are heavy and only needed once the
   // user lands on a screen that actually speaks/listens.
   sl.registerLazySingleton<TtsService>(() => TtsService(sl<ModelRegistry>()));
-  sl.registerLazySingleton<SttService>(() => SttService(sl<ModelRegistry>()));
   sl.registerLazySingleton<LlmService>(() => LlmService(sl<ModelRegistry>()));
+  // SttService uses Gemma 4 for transcription via a callback into LlmService
+  // so it never holds a direct reference to LlmService itself.
+  sl.registerLazySingleton<SttService>(
+    () => SttService(
+      sl<ModelRegistry>(),
+      (wavBytes) => sl<LlmService>().transcribeAudio(wavBytes),
+    ),
+  );
 }

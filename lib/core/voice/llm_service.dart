@@ -40,6 +40,25 @@ final RegExp _thinkBlockRegex = RegExp(
   dotAll: true,
 );
 
+final RegExp _leadingQuote = RegExp(
+  r'''^(?:"|“|'|`)+\s*|\s*(?:"|”|'|`)+$''',
+);
+
+// Gemma occasionally returns a capability/refusal sentence for audio turns
+// (for example "I cannot transcribe the audio... I am a text-based AI").
+// That text is not a transcription and should never be forwarded as user
+// input to the assistant chat turn.
+final RegExp _asrRefusalPattern = RegExp(
+  r'''\b(?:
+(?:can(?:not|'t)|unable to)\s+transcrib\w*.*\baudio\b
+|text-?based\s+ai
+|do not have (?:the )?capabilit\w+ to process audio
+|cannot process audio
+)\b''',
+  caseSensitive: false,
+  dotAll: true,
+);
+
 /// ISO-639 → human-readable name. Injected into the system prompt so we
 /// can pin Gemma's reply language without hoping the model auto-detects
 /// from a short utterance (it routinely doesn't on noisy audio). Only the
@@ -236,18 +255,43 @@ class LlmService {
         Message.withAudio(text: prompt, audioBytes: wavBytes, isUser: true),
       );
       final response = await session.getResponse();
-      return _sanitizeFinalResponse(response).trim();
+      final cleaned = _sanitizeFinalResponse(response).trim();
+      return _sanitizeAsrOutput(cleaned);
     } finally {
       // Sessions are not reused for transcription — each segment is
       // independent, and keeping sessions alive would leak native memory.
+      try {
+        await session.close();
+      } on Object {
+        // best-effort
+      }
     }
   }
 
   String _buildAsrPrompt(String? language) {
     final name =
         language == null ? null : _languageNames[language.toLowerCase()];
-    if (name != null) return 'Transcribe the speech in this audio into $name.';
-    return 'Transcribe the speech in this audio recording.';
+    if (name != null) {
+      return '''
+Transcribe the spoken audio into $name.
+Output only the transcript text.
+Do not explain, apologize, or describe capabilities.
+If speech is unclear, output an empty response.
+''';
+    }
+    return '''
+Transcribe the spoken audio.
+Output only the transcript text.
+Do not explain, apologize, or describe capabilities.
+If speech is unclear, output an empty response.
+''';
+  }
+
+  String _sanitizeAsrOutput(String text) {
+    final normalized = text.trim();
+    if (normalized.isEmpty) return '';
+    if (_asrRefusalPattern.hasMatch(normalized)) return '';
+    return normalized;
   }
 
   /// Generate a full response for [userText]. Blocks until generation
@@ -275,11 +319,12 @@ class LlmService {
   Future<String> _askOnce(String userText, {required int maxTokens}) async {
     final chat = await _ensureChat(maxTokens: maxTokens);
     _logHistorySnapshot(chat, label: 'ask', incoming: userText);
+    final wrappedPrompt = _buildUserTurnPrompt(userText);
     try {
-      await chat.addQueryChunk(Message.text(text: userText, isUser: true));
+      await chat.addQueryChunk(Message.text(text: wrappedPrompt, isUser: true));
       final response = await chat.generateChatResponse();
       final raw = response is TextResponse ? response.token : '';
-      return _sanitizeFinalResponse(raw);
+      return _sanitizeFinalResponse(raw, userText: userText);
     } on Object {
       // The chat (and therefore its underlying session) may be in an
       // inconsistent state after a generation failure. Drop it so the
@@ -300,19 +345,32 @@ class LlmService {
   }) async* {
     final chat = await _ensureChat(maxTokens: maxTokens);
     _logHistorySnapshot(chat, label: 'askStream', incoming: userText);
+    final wrappedPrompt = _buildUserTurnPrompt(userText);
     try {
-      await chat.addQueryChunk(Message.text(text: userText, isUser: true));
+      await chat.addQueryChunk(Message.text(text: wrappedPrompt, isUser: true));
       yield* _sanitizeStream(
         chat
             .generateChatResponseAsync()
             .where((r) => r is TextResponse)
             .map((r) => (r as TextResponse).token)
             .where((t) => t.isNotEmpty),
+        userText: userText,
       );
     } on Object {
       await _disposeChat();
       rethrow;
     }
+  }
+
+  String _buildUserTurnPrompt(String userText) {
+    final input = userText.trim();
+    return '''
+User message:
+$input
+
+Instruction: Answer the user directly. Do not repeat, restate, or quote the
+user message unless the user explicitly asks you to quote it.
+''';
   }
 
   /// Diagnostic logger for verifying multi-turn context retention.
@@ -434,9 +492,10 @@ class LlmService {
   /// `ModelThinkingFilter.removeThinkingFromText` for `ModelType.gemmaIt`,
   /// plus a broader [_reservedToken] strip that catches `<unused\d+>`,
   /// `<mask>`, leftover chat-template markers, and friends.
-  String _sanitizeFinalResponse(String response) {
+  String _sanitizeFinalResponse(String response, {String? userText}) {
     final withoutThinking = response.replaceAll(_thinkBlockRegex, '');
-    return withoutThinking.replaceAll(_reservedToken, '').trim();
+    final cleaned = withoutThinking.replaceAll(_reservedToken, '').trim();
+    return _stripLeadingEcho(cleaned, userText: userText);
   }
 
   /// Streaming version of [_sanitizeFinalResponse]. Buffers across token
@@ -449,11 +508,20 @@ class LlmService {
   ///     be the start of a `_thinkStart` marker.
   ///   * inside thinking — drop bytes, hold back any tail that could be
   ///     the start of a `_thinkEnd` marker; transition out when found.
-  Stream<String> _sanitizeStream(Stream<String> tokens) async* {
+  Stream<String> _sanitizeStream(
+    Stream<String> tokens, {
+    String? userText,
+  }) async* {
     var buffer = '';
     var inThinking = false;
+    var emittedPrefix = false;
 
     String stripReserved(String text) => text.replaceAll(_reservedToken, '');
+
+    String cleanForUser(String text) {
+      final stripped = _stripLeadingEcho(text, userText: userText);
+      return stripped;
+    }
 
     // Longest suffix of [text] that is a prefix of [marker]. Used to hold
     // back trailing bytes that might complete a marker on the next token.
@@ -483,7 +551,17 @@ class LlmService {
           final startIdx = buffer.indexOf(_thinkStart);
           if (startIdx >= 0) {
             final safe = stripReserved(buffer.substring(0, startIdx));
-            if (safe.isNotEmpty) yield safe;
+            if (safe.isNotEmpty) {
+              if (!emittedPrefix) {
+                final cleaned = cleanForUser(safe);
+                if (cleaned.isNotEmpty) {
+                  emittedPrefix = true;
+                  yield cleaned;
+                }
+              } else {
+                yield safe;
+              }
+            }
             buffer = buffer.substring(startIdx + _thinkStart.length);
             inThinking = true;
           } else {
@@ -491,7 +569,17 @@ class LlmService {
             final safe = stripReserved(
               buffer.substring(0, buffer.length - partial),
             );
-            if (safe.isNotEmpty) yield safe;
+            if (safe.isNotEmpty) {
+              if (!emittedPrefix) {
+                final cleaned = cleanForUser(safe);
+                if (cleaned.isNotEmpty) {
+                  emittedPrefix = true;
+                  yield cleaned;
+                }
+              } else {
+                yield safe;
+              }
+            }
             buffer = buffer.substring(buffer.length - partial);
             break;
           }
@@ -503,8 +591,54 @@ class LlmService {
     // the leftover (it's chain-of-thought we don't want to show anyway).
     if (!inThinking && buffer.isNotEmpty) {
       final tail = stripReserved(buffer);
-      if (tail.isNotEmpty) yield tail;
+      if (tail.isNotEmpty) {
+        if (!emittedPrefix) {
+          final cleaned = cleanForUser(tail);
+          if (cleaned.isNotEmpty) yield cleaned;
+        } else {
+          yield tail;
+        }
+      }
     }
+  }
+
+  String _stripLeadingEcho(String text, {String? userText}) {
+    final user = userText?.trim();
+    if (user == null || user.isEmpty) return text.trim();
+    var cleaned = text.trim();
+    if (cleaned.isEmpty) return cleaned;
+
+    String normalize(String value) {
+      return value
+          .toLowerCase()
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .replaceAll(RegExp(r'''^["“'`]+|["”'`]+$'''), '')
+          .trim();
+    }
+
+    final normalizedUser = normalize(user);
+    final normalizedText = normalize(cleaned);
+
+    if (normalizedText.startsWith(normalizedUser)) {
+      cleaned = cleaned.substring(user.length).trimLeft();
+      cleaned = cleaned.replaceFirst(RegExp(r'^[,:;\-–\.]\s*'), '');
+    }
+
+    if (cleaned.toLowerCase().startsWith('you said')) {
+      final idx = cleaned.indexOf(RegExp(r'[:\-]'));
+      if (idx > 0 && idx + 1 < cleaned.length) {
+        cleaned = cleaned.substring(idx + 1).trimLeft();
+      }
+    }
+
+    // If the whole response is just a quoted/paraphrased copy of input,
+    // return an empty string so the caller can retry or show a fallback.
+    if (normalize(cleaned) == normalizedUser ||
+        normalize(cleaned.replaceAll(_leadingQuote, '')) == normalizedUser) {
+      return '';
+    }
+
+    return cleaned.trim();
   }
 
   /// Returns true iff [error] is the LiteRT-LM "no OpenCL" failure AND we

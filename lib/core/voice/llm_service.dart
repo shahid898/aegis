@@ -124,44 +124,52 @@ String _buildSystemPrompt(String? languageCode) {
 }
 
 /// Wraps flutter_gemma's modern API so the rest of the app can treat the
-/// LLM as a simple text-in/text-out service.
+/// LLM as a simple text-in/text-out (and audio-in/text-out) service.
 ///
-/// Lifecycle:
-///   setPack(pack) → install the pack with flutter_gemma (uses the file
-///     we already downloaded) → getActiveModel → cache one model AND
-///     one [InferenceChat]. Subsequent ask()/askStream() calls reuse the
-///     same chat object (and therefore the same underlying conversation).
+/// **Two roles, one model.** Gemma 4 plays two parts here:
+///   * **ASR** for [transcribeAudio] — turn the user's speech into text.
+///   * **Aegis emergency assistant** for [ask]/[askStream] — reply to
+///     that text in-character per `_aegisSystemPromptTemplate`.
 ///
-/// **Why we use [InferenceChat] instead of raw [InferenceModelSession].**
-/// flutter_gemma exposes two APIs for multi-turn conversations:
+/// **Why each turn rebuilds the session.** flutter_gemma 0.13.6 keeps
+/// exactly one active [InferenceModelSession] per model — calling
+/// `model.createSession` while one exists silently returns the cached
+/// session regardless of new flags. That collides head-on with the two
+/// roles above:
 ///
-///   * `model.createSession()` — one underlying LiteRT-LM `Conversation`
-///     reused per `addQueryChunk` + `getResponseAsync`. In theory the
-///     `Conversation` retains history natively; in practice we observed
-///     turn N+1 sometimes losing context from turn N (and `Conversation`
-///     exposes no replay API). It's the right primitive for one-shot
-///     prompts but not for chat.
-///   * `model.createChat()` — wraps a session with explicit history
-///     tracking on the Dart side (`_modelHistory`). When the cumulative
-///     token count approaches the model's context window, the chat
-///     transparently recreates the session and replays the saved
-///     messages, preserving the conversation across the boundary. This
-///     is the path the flutter_gemma example app and integration tests
-///     all take.
+///   * The transcribe session needs `enableAudioModality: true` and
+///     **no system instruction** (so Gemma treats the prompt as ASR
+///     instead of an assistant query).
+///   * The chat session needs the Aegis system prompt and is text-only.
 ///
-/// **Speed.** Both APIs share the same prefill-cache benefit: the system
-/// instruction is baked into the underlying session at creation time, so
-/// after the first turn the ~150-token `_aegisSystemPrompt` is already
-/// in the KV-store. Caching the [InferenceChat] across turns therefore
-/// gives us *both* fast time-to-first-token *and* correct multi-turn
-/// memory. Google's AI Edge Gallery uses the equivalent native pattern
-/// (one `Conversation` per chat instance, reused for every user turn).
+/// If we shared a session, the chat-session-with-Aegis-prompt would
+/// poison transcription on the next turn — Gemma would refuse with
+/// "I am sorry, I cannot transcribe audio. Please describe your
+/// situation." (observed). And if we instead shared the transcribe
+/// session, the chat would lose its persona.
 ///
-/// **Conversation history.** Reusing the chat means the model sees
-/// prior turns within a conversation — exactly what a panicked user
-/// re-asking the same question needs. Call [resetSession] (kept under
-/// that name for backward compatibility) when starting a *new*
-/// top-level conversation so old context doesn't bleed in.
+/// So we build sessions per turn, in this strict order:
+///
+///   1. [transcribeAudio] tears down the cached chat (`_disposeChat`)
+///      so the model's single session slot is free.
+///   2. It creates a fresh **system-prompt-free** session with audio
+///      modality, transcribes, and closes that session.
+///   3. The next [ask]/[askStream] call lazily rebuilds the chat
+///      session with the Aegis system prompt baked in (one prefill).
+///
+/// **Trade-off: chat history doesn't survive an intervening speech
+/// turn.** Each user utterance gets a fresh chat scoped only by the
+/// system prompt. That's acceptable for the emergency-assistant use
+/// case (each turn is usually a self-contained question), and revisits
+/// can rebuild context out of the system prompt rather than chat
+/// history. If long-running conversational memory ever becomes
+/// important, we'd need to manually replay user/assistant pairs into
+/// the new chat — flutter_gemma's `InferenceChat` doesn't expose an
+/// API for that.
+///
+/// Use [resetSession] at the start of a new top-level conversation to
+/// drop the cached chat explicitly (e.g. when the UI flips back to
+/// idle).
 class LlmService {
   LlmService(this._registry);
 
@@ -242,13 +250,40 @@ class LlmService {
     Uint8List wavBytes, {
     String? language,
   }) async {
-    final model = await _ensureModel(maxTokens: 512);
+    // Two interlocking constraints force this dance:
+    //
+    //   1. flutter_gemma 0.13.6 keeps exactly **one** active session per
+    //      model. `model.createSession(...)` silently returns the cached
+    //      session — flags like `enableAudioModality: true` are ignored
+    //      if a session already exists. So leaving the chat alive would
+    //      route the audio bytes through the chat's text-only session
+    //      and they'd be dropped on the floor.
+    //
+    //   2. The chat session has the Aegis system prompt baked in. After
+    //      the first chat reply Gemma is firmly in "emergency assistant"
+    //      mode and starts *refusing* transcription requests on later
+    //      turns ("I am sorry, I cannot transcribe audio. Please describe
+    //      your situation."). The transcribe session must therefore start
+    //      with **no system instruction** so the model treats the prompt
+    //      purely as ASR.
+    //
+    // We tear the chat down before every transcription and let it lazily
+    // rebuild on the next askStream call. Trade-off: chat memory does
+    // not survive an intervening speech turn — acceptable for the
+    // emergency-assistant use case where each turn is self-contained.
+    await _disposeChat();
+
+    final model = await _ensureModel(maxTokens: 1024);
     final prompt = _buildAsrPrompt(language);
+
     final session = await model.createSession(
+      // Greedy decode for transcription: deterministic, no creativity.
       temperature: 0.0,
       randomSeed: 1,
       topK: 1,
       enableAudioModality: true,
+      // NB: NO systemInstruction here — we want a clean ASR session,
+      // not the Aegis persona. See comment above for why.
     );
     try {
       await session.addQueryChunk(
@@ -258,37 +293,91 @@ class LlmService {
       final cleaned = _sanitizeFinalResponse(response).trim();
       return _sanitizeAsrOutput(cleaned);
     } finally {
-      // Sessions are not reused for transcription — each segment is
-      // independent, and keeping sessions alive would leak native memory.
       try {
         await session.close();
       } on Object {
-        // best-effort
+        // best-effort — the native session may already be torn down,
+        // and stopGeneration on a closed session throws
+        // IllegalStateException("Session not created"). That's harmless
+        // here; we only cared about freeing the slot.
       }
     }
   }
 
+  /// Official Gemma 4 ASR prompt template, copied verbatim from
+  /// https://ai.google.dev/gemma/docs/audio. Gemma 4 E2B/E4B were
+  /// trained on this exact wording; deviating from it (paraphrasing,
+  /// adding "do not refuse" guardrails, etc.) measurably degrades
+  /// recognition accuracy because the model no longer maps the prompt
+  /// to its trained ASR pattern.
   String _buildAsrPrompt(String? language) {
     final name =
         language == null ? null : _languageNames[language.toLowerCase()];
     if (name != null) {
-      return '''
-Transcribe the spoken audio into $name.
-Output only the transcript text.
-Do not explain, apologize, or describe capabilities.
-If speech is unclear, output an empty response.
-''';
+      return 'Transcribe the following speech segment in $name into $name '
+          'text. Follow these specific instructions for formatting the '
+          'answer:\n'
+          '*   Only output the transcription, with no newlines.\n'
+          '*   When transcribing numbers, write the digits, i.e. write '
+          '1.7 and not one point seven, and write 3 instead of three.';
     }
-    return '''
-Transcribe the spoken audio.
-Output only the transcript text.
-Do not explain, apologize, or describe capabilities.
-If speech is unclear, output an empty response.
-''';
+    return 'Transcribe the following speech segment in its original '
+        'language. Follow these specific instructions for formatting the '
+        'answer:\n'
+        '*   Only output the transcription, with no newlines.\n'
+        '*   When transcribing numbers, write the digits, i.e. write 1.7 '
+        'and not one point seven, and write 3 instead of three.';
   }
 
+  /// Phrases that only appear in the ASR prompt itself, never in real
+  /// user speech. Quantised Gemma 4 E2B on edge sometimes hallucinates
+  /// the prompt back when audio recognition has gaps — we observed
+  /// transcriptions like
+  ///   "Hello can you hear me I'm Transcribe the following in its
+  ///    original language Follow these specific instructions ..."
+  /// where only "Hello can you hear me" was actually spoken. Truncating
+  /// at the first prompt-echo marker reliably recovers the real speech.
+  /// Order matters: longer / more distinctive markers first so we don't
+  /// snip on a coincidental short phrase like "for the".
+  static const List<String> _asrEchoMarkers = [
+    'transcribe the following',
+    'specific instructions for formatting',
+    'output the transcription with no newlines',
+    'when transcribing numbers',
+    'write 1.7 and not one point seven',
+    'one point seven',
+  ];
+
   String _sanitizeAsrOutput(String text) {
-    final normalized = text.trim();
+    var normalized = text.trim();
+    if (normalized.isEmpty) return '';
+
+    // Strip echoed ASR prompt fragments (see _asrEchoMarkers docstring).
+    // We compare lowercased to defeat capitalisation drift but slice the
+    // original string so the user's actual capitalisation survives.
+    final lowered = normalized.toLowerCase();
+    var cutAt = normalized.length;
+    for (final marker in _asrEchoMarkers) {
+      final idx = lowered.indexOf(marker);
+      if (idx >= 0 && idx < cutAt) {
+        cutAt = idx;
+      }
+    }
+    if (cutAt < normalized.length) {
+      // Walk back over any trailing connector words ("I'm", "and", "to",
+      // "—") that Gemma sometimes emits as a bridge between real speech
+      // and the echoed prompt.
+      var trimmed = normalized.substring(0, cutAt).trimRight();
+      trimmed = trimmed.replaceAll(
+        RegExp(
+          r"(?:\s+(?:i'?m|and|to|the|a|an|that|so|but|or|—|-))+\s*$",
+          caseSensitive: false,
+        ),
+        '',
+      );
+      normalized = trimmed.trim();
+    }
+
     if (normalized.isEmpty) return '';
     if (_asrRefusalPattern.hasMatch(normalized)) return '';
     return normalized;

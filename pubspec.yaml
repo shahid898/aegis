@@ -64,8 +64,15 @@ dependencies:
   # Microphone capture (Phase 3 assistant loop)
   flutter_sound: ^9.30.0
 
-  # On-device LLM runtime (Phase 3 assistant brain)
-  flutter_gemma: ^0.13.6
+  # On-device LLM runtime (Phase 3 assistant brain).
+  # 0.14.0 replaces the buggy Kotlin LiteRtLm AAR on Android with a Dart
+  # FFI path (same as desktop/iOS). 0.13.x's Kotlin
+  # `Conversation$JniMessageCallbackImpl` was the source of the
+  # `MarkPendingInputTokenAsProcessed` and `AddPendingInputToken called
+  # with an existing pending token` errors that surfaced whenever we
+  # closed and recreated sessions to swap audio modality on/off between
+  # transcription and chat turns.
+  flutter_gemma: ^0.14.0
 
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2

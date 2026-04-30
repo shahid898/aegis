@@ -453,14 +453,97 @@ class LlmService {
 
   String _buildUserTurnPrompt(String userText) {
     final input = userText.trim();
+    // Per-turn language nudge. We want the reply language to match what
+    // the user *actually spoke this turn*, not the language they picked
+    // in onboarding — a Hindi speaker who picked English-UI should still
+    // get Hindi answers when they ask in Hindi. Order:
+    //
+    //   1. Script auto-detect from the transcript. Devanagari, Bengali,
+    //      Tamil, Arabic etc. are unambiguous — when present, they win
+    //      outright over [_preferredLanguage].
+    //   2. Latin-script (or empty/punctuation-only) input has no script
+    //      signal, so we fall back to [_preferredLanguage] from
+    //      onboarding, which is usually the right answer for English /
+    //      Spanish / French speakers.
+    //   3. Neither set → tell the model to match the user's language.
+    final scriptCode = _detectLanguageFromScript(input);
+    final code = scriptCode ?? _preferredLanguage;
+    final name = code == null ? null : _languageNames[code];
+    final languageLine = name == null
+        ? 'Reply in the same language the user just used (matching script).'
+        : 'Reply in $name only, using the native script for $name.';
     return '''
 User message:
 $input
 
-Instruction: Answer the user directly. Do not repeat, restate, or quote the
-user message unless the user explicitly asks you to quote it.
+Instructions:
+- Answer the user directly. Do not repeat, restate, or quote the user
+  message unless the user explicitly asks you to quote it.
+- $languageLine
 ''';
   }
+
+  /// Best-effort ISO-639 code from the dominant script in [text]. Used as
+  /// a fallback when the user hasn't explicitly picked a language but is
+  /// clearly speaking one (e.g. Devanagari → Hindi). Returns null for
+  /// Latin script or empty input — the system prompt's "match the user"
+  /// rule handles those.
+  String? _detectLanguageFromScript(String text) {
+    if (text.isEmpty) return null;
+    final scriptCounts = <String, int>{};
+    for (final rune in text.runes) {
+      final s = _scriptForRune(rune);
+      if (s == null) continue;
+      scriptCounts[s] = (scriptCounts[s] ?? 0) + 1;
+    }
+    if (scriptCounts.isEmpty) return null;
+    final dominant = scriptCounts.entries
+        .reduce((a, b) => a.value >= b.value ? a : b)
+        .key;
+    return _scriptToLanguageHint[dominant];
+  }
+
+  /// Unicode block lookup. Only covers scripts we ship a TTS voice for —
+  /// other scripts fall through to "match the user" via the system prompt.
+  static String? _scriptForRune(int rune) {
+    if (rune >= 0x0900 && rune <= 0x097F) return 'devanagari'; // hi/mr
+    if (rune >= 0x0980 && rune <= 0x09FF) return 'bengali'; // bn
+    if (rune >= 0x0A00 && rune <= 0x0A7F) return 'gurmukhi'; // pa
+    if (rune >= 0x0A80 && rune <= 0x0AFF) return 'gujarati'; // gu
+    if (rune >= 0x0B80 && rune <= 0x0BFF) return 'tamil'; // ta
+    if (rune >= 0x0C00 && rune <= 0x0C7F) return 'telugu'; // te
+    if (rune >= 0x0C80 && rune <= 0x0CFF) return 'kannada'; // kn
+    if (rune >= 0x0D00 && rune <= 0x0D7F) return 'malayalam'; // ml
+    if (rune >= 0x0600 && rune <= 0x06FF) return 'arabic'; // ar/ur
+    if (rune >= 0x0400 && rune <= 0x04FF) return 'cyrillic'; // ru
+    if (rune >= 0x0E00 && rune <= 0x0E7F) return 'thai'; // th
+    if (rune >= 0x4E00 && rune <= 0x9FFF) return 'cjk'; // zh
+    if (rune >= 0x3040 && rune <= 0x30FF) return 'kana'; // ja
+    if (rune >= 0xAC00 && rune <= 0xD7AF) return 'hangul'; // ko
+    return null; // Latin / digits / punctuation — no signal.
+  }
+
+  /// Devanagari covers both Hindi and Marathi; we default to Hindi as
+  /// the more common case. Arabic similarly covers Urdu — same default
+  /// rule (Arabic gets Arabic). If we ever need finer-grained
+  /// disambiguation, the cubit can pass an explicit `_preferredLanguage`
+  /// from onboarding state.
+  static const Map<String, String> _scriptToLanguageHint = {
+    'devanagari': 'hi',
+    'bengali': 'bn',
+    'gurmukhi': 'pa',
+    'gujarati': 'gu',
+    'tamil': 'ta',
+    'telugu': 'te',
+    'kannada': 'kn',
+    'malayalam': 'ml',
+    'arabic': 'ar',
+    'cyrillic': 'ru',
+    'thai': 'th',
+    'cjk': 'zh',
+    'kana': 'ja',
+    'hangul': 'ko',
+  };
 
   /// Diagnostic logger for verifying multi-turn context retention.
   ///

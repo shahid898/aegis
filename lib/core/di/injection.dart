@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
 import '../geo/country_resolver.dart';
+import '../skills/skills_registry.dart';
 import '../storage/storage_service.dart';
 import '../voice/llm_service.dart';
 import '../voice/model_pack_repository.dart';
@@ -30,10 +31,18 @@ Future<void> configureDependencies() async {
     ModelPackRepository(sl<Dio>(), sl<ModelRegistry>()),
   );
 
+  // Agent Skills catalog. Singleton: the catalog is read-only after
+  // load and shared across LlmService and any future surfaces (eg. a
+  // "browse skills" debug screen). Loaded on first access via
+  // SkillsRegistry.load() inside LlmService.triageStream.
+  sl.registerSingleton<SkillsRegistry>(SkillsRegistry());
+
   // Voice services are lazy — engines are heavy and only needed once the
   // user lands on a screen that actually speaks/listens.
   sl.registerLazySingleton<TtsService>(() => TtsService(sl<ModelRegistry>()));
-  sl.registerLazySingleton<LlmService>(() => LlmService(sl<ModelRegistry>()));
+  sl.registerLazySingleton<LlmService>(
+    () => LlmService(sl<ModelRegistry>(), skills: sl<SkillsRegistry>()),
+  );
   // SttService uses Gemma 4 for transcription via a callback into LlmService
   // so it never holds a direct reference to LlmService itself.
   sl.registerLazySingleton<SttService>(

@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:genui/genui.dart' as genui;
 
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/model_catalog.dart';
 import '../../../core/voice/model_pack.dart';
 import '../../../core/voice/stt_service.dart';
+import '../../../core/voice/triage_input.dart';
 import '../../../core/voice/tts_service.dart';
+import '../widgets/aegis_catalog.dart';
 
 part 'assistant_cubit.freezed.dart';
 
@@ -19,23 +23,35 @@ part 'assistant_cubit.freezed.dart';
 /// pair otherwise gets clobbered the moment the next utterance starts).
 @immutable
 class ConversationTurn {
-  const ConversationTurn({required this.user, required this.assistant});
+  const ConversationTurn({
+    required this.user,
+    required this.assistant,
+    this.hadSurface = false,
+  });
 
   final String user;
   final String assistant;
+
+  /// True when the agent emitted an A2UI surface for this turn (eg. a
+  /// triage / capture-evidence prompt). Past turns don't keep a frozen
+  /// snapshot of the surface — the home view shows a marker chip
+  /// instead. The live surface always reflects the most recent turn.
+  final bool hadSurface;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ConversationTurn &&
           other.user == user &&
-          other.assistant == assistant;
+          other.assistant == assistant &&
+          other.hadSurface == hadSurface;
 
   @override
-  int get hashCode => Object.hash(user, assistant);
+  int get hashCode => Object.hash(user, assistant, hadSurface);
 
   @override
-  String toString() => 'ConversationTurn(user: $user, assistant: $assistant)';
+  String toString() =>
+      'ConversationTurn(user: $user, assistant: $assistant, hadSurface: $hadSurface)';
 }
 
 /// Stage of the assistant pipeline. The UI reacts to each one: the mic
@@ -48,6 +64,7 @@ enum AssistantStage {
   transcribing,
   thinking,
   speaking,
+  awaitingConfirmation,
   degraded, // Voice disabled (no model pack installed)
   error,
 }
@@ -59,6 +76,8 @@ abstract class AssistantState with _$AssistantState {
     @Default('') String transcript,
     @Default('') String response,
     @Default(<ConversationTurn>[]) List<ConversationTurn> turns,
+    @Default(false) bool surfaceReady,
+    @Default('') String thinkingTrace,
     String? errorMessage,
   }) = _AssistantState;
 
@@ -69,7 +88,8 @@ abstract class AssistantState with _$AssistantState {
       stage == AssistantStage.listening ||
       stage == AssistantStage.transcribing ||
       stage == AssistantStage.thinking ||
-      stage == AssistantStage.speaking;
+      stage == AssistantStage.speaking ||
+      stage == AssistantStage.awaitingConfirmation;
 
   /// True when the cubit is in the middle of an active conversation —
   /// regardless of which sub-stage (listening / thinking / speaking).
@@ -78,21 +98,23 @@ abstract class AssistantState with _$AssistantState {
       stage == AssistantStage.listening ||
       stage == AssistantStage.transcribing ||
       stage == AssistantStage.thinking ||
-      stage == AssistantStage.speaking;
+      stage == AssistantStage.speaking ||
+      stage == AssistantStage.awaitingConfirmation;
 }
 
 /// Orchestrates the offline assistant pipeline:
-///   mic → STT (streaming partials + endpoint) → LLM → TTS (sentence-chunked).
+///   mic → STT → LLM (genui-aware triageStream) → TTS + live A2UI surface.
 ///
-/// One **conversation** can contain many turns. The user taps once to
-/// open the mic; the cubit listens continuously, fires the LLM at every
-/// recognized endpoint, speaks the response, and immediately reopens the
-/// mic for the next utterance. A second tap closes the conversation.
+/// One **conversation** can contain many turns. Every turn flows through
+/// the same pipeline — the agent decides whether to emit a generated
+/// surface (triage report, capture-evidence prompt, etc.) or to keep
+/// the reply purely conversational. From the cubit's perspective, both
+/// modes share the same code path: the genui transport routes JSON
+/// envelopes to the surface controller and the leftover prose to TTS.
 ///
-/// The cubit owns no UI-facing state beyond [AssistantState]; all model
-/// lifecycles belong to the services it is handed. On construction it
-/// tries to bind the region's best TTS / STT / LLM packs; if any piece
-/// is missing the cubit enters [AssistantStage.degraded].
+/// Verification chrome (Confirm / Reject) only appears when the agent
+/// emits a `ConfirmActionBar` inside the surface. A purely text reply
+/// commits straight to history and the mic re-opens.
 class AssistantCubit extends Cubit<AssistantState> {
   AssistantCubit({
     required AudioRecorderService recorder,
@@ -101,15 +123,29 @@ class AssistantCubit extends Cubit<AssistantState> {
     required TtsService tts,
     required String countryCode,
     String? languageCode,
-  }) : _recorder = recorder,
-       _stt = stt,
-       _llm = llm,
-       _tts = tts,
-       _countryCode = countryCode,
-       _languageCode = languageCode,
-       super(const AssistantState()) {
+  })  : _recorder = recorder,
+        _stt = stt,
+        _llm = llm,
+        _tts = tts,
+        _countryCode = countryCode,
+        _languageCode = languageCode,
+        _catalog = buildAegisCatalog(),
+        super(const AssistantState()) {
+    _surfaceController = genui.SurfaceController(catalogs: [_catalog]);
+    _actionSub = _surfaceController.onSubmit.listen(_onSurfaceSubmit);
+    _llm.setTriageCatalog(_catalog);
     _bootstrap();
   }
+
+  static const String surfaceId = 'aegis-home';
+
+  /// Cap on prior turns we replay into the per-turn `incidentLog`.
+  /// Each turn ≈ 100-300 tokens of summarised history; 4 entries
+  /// keeps replay under ~1.2k tokens which fits inside Gemma 4
+  /// E2B's tight context window with room for the system prompt and
+  /// the model's reply. The full chat history is still rendered in
+  /// the UI.
+  static const int _historyTurnsForReplay = 4;
 
   final AudioRecorderService _recorder;
   final SttService _stt;
@@ -117,11 +153,22 @@ class AssistantCubit extends Cubit<AssistantState> {
   final TtsService _tts;
   final String _countryCode;
   final String? _languageCode;
+  final genui.Catalog _catalog;
+
+  late final genui.SurfaceController _surfaceController;
+  late final StreamSubscription<genui.ChatMessage> _actionSub;
 
   StreamSubscription<SttUpdate>? _sttSub;
   StreamSubscription<String>? _llmSub;
+  StreamSubscription<dynamic>? _surfaceUpdatesSub;
+  Timer? _autoConfirmTimer;
+  genui.A2uiTransportAdapter? _transport;
   bool _voiceReady = false;
   bool _conversationActive = false;
+
+  /// Exposed to the home view so the [genui.Surface] widget can bind
+  /// to the cubit's controller via `contextFor(surfaceId)`.
+  genui.SurfaceController get surfaceController => _surfaceController;
 
   Future<void> _bootstrap() async {
     emit(state.copyWith(stage: AssistantStage.preparing));
@@ -134,14 +181,8 @@ class AssistantCubit extends Cubit<AssistantState> {
       // foreign / wrong. The same applies to the streaming-vs-Whisper STT
       // pick: Hindi speakers should land on Whisper-multilingual instead of
       // the English-only Zipformer.
-      // Order TTS packs so the user's preferred language pack is first
-      // (becomes the script-ambiguous fallback inside TtsService) but EVERY
-      // pack in the region plan is loaded as a resident engine. Without
-      // this, a Hindi voice would have to phonemize English replies via
-      // espeak-ng-hi — the user perceived that as a "Spanish" accent.
       final ttsPacks = _orderedTtsPacks(plan.tts, _languageCode);
       // VAD is global / language-agnostic: always pick the first pack.
-      // The plan should always include exactly one VAD pack today.
       final vad = plan.vad.isNotEmpty ? plan.vad.first : null;
       final llm = plan.llm.isNotEmpty ? plan.llm.first : null;
 
@@ -149,15 +190,9 @@ class AssistantCubit extends Cubit<AssistantState> {
       if (vad != null) _stt.setVadPack(vad);
       if (llm != null) {
         _llm.setPack(llm);
-        // Pin Gemma's reply language to the user's selection so the model
-        // can't drift to English when the user is speaking Hindi (and
-        // vice-versa) — required for the multi-pack TTS routing above to
-        // pick the right voice consistently.
         _llm.setPreferredLanguage(_languageCode);
       }
 
-      // Gemma 4 handles transcription natively; only the VAD pack (Silero,
-      // ~2 MB) must be installed for the streaming pipeline to start.
       final sttOk = vad != null && await _stt.isAvailable();
       final llmOk = llm != null && await _llm.isAvailable();
 
@@ -170,13 +205,14 @@ class AssistantCubit extends Cubit<AssistantState> {
       emit(state.copyWith(stage: AssistantStage.idle));
     } on Object catch (e) {
       emit(
-        state.copyWith(stage: AssistantStage.error, errorMessage: e.toString()),
+        state.copyWith(
+          stage: AssistantStage.error,
+          errorMessage: e.toString(),
+        ),
       );
     }
   }
 
-  /// Toggle the conversation: tap once to start listening, tap again to
-  /// stop. The single entry point keeps the UI button trivial.
   Future<void> toggleConversation() async {
     if (_conversationActive) {
       await stopConversation();
@@ -185,41 +221,35 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
   }
 
-  /// Open the mic and start the auto-looping listen → respond → listen
-  /// pipeline. Safe to call when already running (no-op).
   Future<void> startConversation() async {
     if (!_voiceReady) return;
     if (_conversationActive) return;
     _conversationActive = true;
-    // Reset transcript/response/turns so the user sees a clean slate.
-    // Clearing `turns` here matches the LLM-side reset below: a brand-new
-    // top-level conversation should have no visible history *and* no LLM
-    // memory of prior conversations.
     emit(
       state.copyWith(
         transcript: '',
         response: '',
         turns: const <ConversationTurn>[],
+        surfaceReady: false,
+        thinkingTrace: '',
         errorMessage: null,
       ),
     );
-    // Drop any LLM history from a prior conversation. Within *this*
-    // conversation we keep the session warm across turns so the system
-    // prompt prefills only once — see [LlmService] docs.
     unawaited(_llm.resetSession());
-    // Run the loop in the background. Errors emit to state; the loop
-    // ends on its own when [_conversationActive] flips to false.
     unawaited(_runListenLoop());
   }
 
-  /// End the conversation. Cancels in-flight STT/LLM/TTS work and
-  /// returns the assistant to idle.
   Future<void> stopConversation() async {
     _conversationActive = false;
+    _autoConfirmTimer?.cancel();
     await _sttSub?.cancel();
     _sttSub = null;
     await _llmSub?.cancel();
     _llmSub = null;
+    await _surfaceUpdatesSub?.cancel();
+    _surfaceUpdatesSub = null;
+    _transport?.dispose();
+    _transport = null;
     try {
       await _recorder.cancel();
     } on Object {
@@ -228,21 +258,69 @@ class AssistantCubit extends Cubit<AssistantState> {
     await _tts.stop();
     if (state.stage != AssistantStage.degraded &&
         state.stage != AssistantStage.error) {
-      emit(state.copyWith(stage: AssistantStage.idle));
+      emit(state.copyWith(stage: AssistantStage.idle, surfaceReady: false));
     }
   }
 
-  /// Compatibility shim — the previous press-to-talk UI called
-  /// [startListening]; now it just opens a conversation.
   Future<void> startListening() => startConversation();
-
-  /// Compatibility shim — the previous press-to-talk UI called
-  /// [stopAndAsk]; now closes the conversation. Real turn-taking is
-  /// driven by endpointing inside the loop.
   Future<void> stopAndAsk() => stopConversation();
-
-  /// Abort the current turn and return to idle.
   Future<void> cancel() => stopConversation();
+
+  /// Type-driven ask — bypasses the mic loop. Used when the user
+  /// prefers typing (low-bandwidth scenarios, accessibility profiles
+  /// that rely on text input).
+  Future<void> submitTyped(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    if (!_voiceReady) return;
+    _conversationActive = true;
+    await _respondTo(trimmed);
+    _conversationActive = false;
+  }
+
+  /// Confirms the currently displayed surface — fired either by the
+  /// auto-confirm timer (Ask-style turns) or by the agent-emitted
+  /// `ConfirmActionBar`. Clears the surface and re-opens the mic if
+  /// the conversation is still active.
+  Future<void> confirmSurface() async {
+    if (state.stage != AssistantStage.awaitingConfirmation) return;
+    _autoConfirmTimer?.cancel();
+    emit(state.copyWith(stage: AssistantStage.idle, surfaceReady: false));
+    if (_conversationActive) {
+      unawaited(_runListenLoop());
+    }
+  }
+
+  /// Rejects the currently displayed surface. Re-asks the model with a
+  /// correction note appended to the incident log so the next pass has
+  /// the user's feedback. Only meaningful if the previous turn left a
+  /// surface up.
+  Future<void> rejectSurface({String? correction}) async {
+    if (state.stage != AssistantStage.awaitingConfirmation) return;
+    final last = state.turns.isEmpty ? null : state.turns.last;
+    final userText = last?.user;
+    if (userText == null || userText.isEmpty) {
+      emit(state.copyWith(stage: AssistantStage.idle, surfaceReady: false));
+      return;
+    }
+    _autoConfirmTimer?.cancel();
+    await _tts.stop();
+
+    // Drop the rejected turn from history so the corrected retry
+    // takes its place, then re-run the LLM with a feedback note.
+    final priorTurns = state.turns.sublist(0, state.turns.length - 1);
+    emit(state.copyWith(
+      turns: List.unmodifiable(priorTurns),
+      surfaceReady: false,
+      thinkingTrace: '',
+    ));
+    await _respondTo(
+      userText,
+      extraIncidentLog: <String>[
+        'previous-attempt-rejected: ${correction ?? "user rejected the generated surface; re-evaluate"}',
+      ],
+    );
+  }
 
   // ---- internals ----------------------------------------------------------
 
@@ -252,54 +330,48 @@ class AssistantCubit extends Cubit<AssistantState> {
         final transcript = await _captureUtterance();
         if (!_conversationActive) break;
         if (transcript == null) {
-          // Capture failed (permission, error). Surface the error and
-          // exit the loop; the UI will offer a retry tap.
           _conversationActive = false;
           break;
         }
-        if (transcript.trim().isEmpty) {
-          // Silent capture — go straight back to listening without
-          // bothering the LLM.
-          continue;
-        }
+        if (transcript.trim().isEmpty) continue;
         await _respondTo(transcript);
+        // While awaiting user confirmation we pause the listen loop —
+        // the next iteration starts after [confirmSurface].
+        if (state.stage == AssistantStage.awaitingConfirmation) break;
       }
     } on Object catch (e) {
       _conversationActive = false;
       emit(
-        state.copyWith(stage: AssistantStage.error, errorMessage: e.toString()),
+        state.copyWith(
+          stage: AssistantStage.error,
+          errorMessage: e.toString(),
+        ),
       );
       return;
     }
 
     if (state.stage != AssistantStage.degraded &&
-        state.stage != AssistantStage.error) {
+        state.stage != AssistantStage.error &&
+        state.stage != AssistantStage.awaitingConfirmation) {
       emit(state.copyWith(stage: AssistantStage.idle));
     }
   }
 
-  /// Capture one utterance from the mic. Returns the recognized text on
-  /// the first endpoint, `''` if the user said nothing, or `null` if the
-  /// capture failed (permission, native error, conversation cancelled).
   Future<String?> _captureUtterance() async {
     if (!_recorder.isOpen) {
       try {
         await _recorder.open();
       } on MicrophonePermissionException {
-        emit(
-          state.copyWith(
-            stage: AssistantStage.error,
-            errorMessage: 'Microphone permission is required to talk to Aegis.',
-          ),
-        );
+        emit(state.copyWith(
+          stage: AssistantStage.error,
+          errorMessage: 'Microphone permission is required to talk to Aegis.',
+        ));
         return null;
       } on Object catch (e) {
-        emit(
-          state.copyWith(
-            stage: AssistantStage.error,
-            errorMessage: e.toString(),
-          ),
-        );
+        emit(state.copyWith(
+          stage: AssistantStage.error,
+          errorMessage: e.toString(),
+        ));
         return null;
       }
     }
@@ -308,67 +380,58 @@ class AssistantCubit extends Cubit<AssistantState> {
     try {
       audioStream = await _recorder.startStream();
     } on Object catch (e) {
-      emit(
-        state.copyWith(stage: AssistantStage.error, errorMessage: e.toString()),
-      );
+      emit(state.copyWith(
+        stage: AssistantStage.error,
+        errorMessage: e.toString(),
+      ));
       return null;
     }
 
-    emit(
-      state.copyWith(
-        stage: AssistantStage.listening,
-        transcript: '',
-        response: '',
-        errorMessage: null,
-      ),
-    );
+    emit(state.copyWith(
+      stage: AssistantStage.listening,
+      transcript: '',
+      response: '',
+      errorMessage: null,
+    ));
 
     final completer = Completer<String?>();
 
-    // Pin Whisper to the user's selected language. Without this hint,
-    // tiny-Whisper auto-detects language per-segment and drifts to wildly
-    // wrong codes (Japanese, Arabic) on short utterances or noisy audio.
-    // Empty string keeps the auto-detect path for users who haven't picked
-    // a language yet.
     _sttSub = _stt
         .transcribeStream(audioStream, language: _languageCode)
         .listen(
-          (update) {
-            if (!_conversationActive) return;
-            switch (update) {
-              case SttPartial(:final text):
-                emit(state.copyWith(transcript: text));
-              case SttFinal(:final text):
-                emit(
-                  state.copyWith(
-                    stage: AssistantStage.transcribing,
-                    transcript: text,
-                  ),
-                );
-                if (!completer.isCompleted) completer.complete(text);
-            }
-          },
-          onError: (Object e, StackTrace st) {
-            if (!completer.isCompleted) completer.completeError(e, st);
-          },
-          onDone: () {
-            if (!completer.isCompleted) completer.complete('');
-          },
-          cancelOnError: true,
-        );
+      (update) {
+        if (!_conversationActive) return;
+        switch (update) {
+          case SttPartial(:final text):
+            emit(state.copyWith(transcript: text));
+          case SttFinal(:final text):
+            emit(state.copyWith(
+              stage: AssistantStage.transcribing,
+              transcript: text,
+            ));
+            if (!completer.isCompleted) completer.complete(text);
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        if (!completer.isCompleted) completer.completeError(e, st);
+      },
+      onDone: () {
+        if (!completer.isCompleted) completer.complete('');
+      },
+      cancelOnError: true,
+    );
 
     String? captured;
     try {
       captured = await completer.future;
     } on Object catch (e) {
-      emit(
-        state.copyWith(stage: AssistantStage.error, errorMessage: e.toString()),
-      );
+      emit(state.copyWith(
+        stage: AssistantStage.error,
+        errorMessage: e.toString(),
+      ));
       captured = null;
     }
 
-    // Tear down the audio stream — a fresh one is opened for the next
-    // turn. This also stops the mic from picking up Aegis's own TTS.
     await _sttSub?.cancel();
     _sttSub = null;
     try {
@@ -380,93 +443,155 @@ class AssistantCubit extends Cubit<AssistantState> {
     return captured;
   }
 
-  /// Run the LLM on [transcript] and stream sentences into TTS. Returns
-  /// when the response is fully spoken or the conversation is stopped.
-  Future<void> _respondTo(String transcript) async {
-    emit(state.copyWith(stage: AssistantStage.thinking, response: ''));
+  /// Run the LLM on [transcript] through the genui-aware
+  /// [LlmService.triageStream] and route the streamed output to TTS +
+  /// the inline A2UI surface. The agent decides per-turn whether to
+  /// emit a surface (triage flow) or pure text (ask flow); both
+  /// outcomes share this same code path.
+  Future<void> _respondTo(
+    String transcript, {
+    List<String> extraIncidentLog = const <String>[],
+  }) async {
+    emit(state.copyWith(
+      stage: AssistantStage.thinking,
+      response: '',
+      surfaceReady: false,
+      thinkingTrace: '',
+    ));
     await _llmSub?.cancel();
+    await _surfaceUpdatesSub?.cancel();
+    _transport?.dispose();
+    _autoConfirmTimer?.cancel();
 
-    // [buffer] is the cumulative response shown in the UI.
-    // [pending] is the not-yet-spoken tail — we slice complete sentences
-    // off the front and feed them to TTS as the model decodes the rest.
-    final buffer = StringBuffer();
+    // Build the incident log from prior turns so the one-shot triage
+    // session still sees conversational context (the LiteRT-LM session
+    // doesn't survive across turns — see LlmService docs). We cap the
+    // replay to the last [_historyTurnsForReplay] turns to keep us
+    // inside the engine's prefill budget — the full chat history is
+    // still visible in the UI.
+    final history = <String>[];
+    final replay = state.turns.length > _historyTurnsForReplay
+        ? state.turns.sublist(state.turns.length - _historyTurnsForReplay)
+        : state.turns;
+    for (final turn in replay) {
+      history.add('user: ${turn.user}');
+      // Summarise long replies — the full text is rendered in the UI;
+      // the model only needs a short hint that it answered earlier.
+      final summary = turn.assistant.length > 160
+          ? '${turn.assistant.substring(0, 160)}…'
+          : turn.assistant;
+      history.add('aegis: $summary');
+    }
+    history.addAll(extraIncidentLog);
+
+    final transport = genui.A2uiTransportAdapter();
+    _transport = transport;
+    transport.incomingMessages.listen(_surfaceController.handleMessage);
+
+    final responseBuffer = StringBuffer();
     final pending = StringBuffer();
-    final completer = Completer<void>();
     var spokeAtLeastOne = false;
+    var sawSurface = false;
 
     void flushSentences({bool force = false}) {
       final text = pending.toString();
       final cut = force ? text.length : _lastSentenceBoundary(text);
       if (cut <= 0) return;
       final speakable = text.substring(0, cut).trim();
-      final remainder = text.substring(cut);
       pending
         ..clear()
-        ..write(remainder);
+        ..write(text.substring(cut));
       if (speakable.isEmpty) return;
       if (!spokeAtLeastOne) {
         spokeAtLeastOne = true;
-        // Flip stage as soon as the *first* sentence is queued so the
-        // UI mic indicator stops pulsing while audio is playing.
         emit(state.copyWith(stage: AssistantStage.speaking));
       }
       unawaited(_tts.enqueue(speakable));
     }
 
+    transport.incomingText.listen(
+      (chunk) {
+        if (!_conversationActive && state.stage != AssistantStage.thinking) {
+          return;
+        }
+        responseBuffer.write(chunk);
+        pending.write(chunk);
+        emit(state.copyWith(response: responseBuffer.toString()));
+        flushSentences();
+      },
+    );
+
+    _surfaceUpdatesSub = _surfaceController.surfaceUpdates.listen((_) {
+      if (state.surfaceReady) return;
+      sawSurface = true;
+      emit(state.copyWith(surfaceReady: true));
+    });
+
+    final completer = Completer<void>();
     _llmSub = _llm
-        .askStream(transcript)
+        .triageStream(TriageInput(
+          userText: transcript,
+          incidentLog: history,
+        ))
         .listen(
-          (chunk) {
-            if (!_conversationActive) return;
-            buffer.write(chunk);
-            pending.write(chunk);
-            emit(state.copyWith(response: buffer.toString()));
-            flushSentences();
-          },
-          onError: (Object e, StackTrace st) {
-            if (!completer.isCompleted) completer.completeError(e, st);
-          },
-          onDone: () {
-            // Speak whatever's left even if it didn't end with punctuation.
-            flushSentences(force: true);
-            if (!completer.isCompleted) completer.complete();
-          },
-          cancelOnError: true,
-        );
+      transport.addChunk,
+      onDone: () async {
+        try {
+          await transport.flush();
+        } on Object {
+          // best-effort
+        }
+        if (!completer.isCompleted) completer.complete();
+      },
+      onError: (Object e, StackTrace st) {
+        if (!completer.isCompleted) completer.completeError(e, st);
+      },
+      cancelOnError: true,
+    );
 
     try {
       await completer.future;
-      // Wait for the queue to drain so we don't return to listening
-      // while audio is still playing.
+      flushSentences(force: true);
       if (spokeAtLeastOne) {
         await _tts.whenIdle;
       }
-      // Commit the completed turn to the visible history. Otherwise the
-      // next utterance's `transcript: '', response: ''` reset would wipe
-      // the prior bubbles off the screen — we'd appear to have no memory
-      // even though [LlmService] still does.
-      final assistantText = buffer.toString().trim();
-      final userText = transcript.trim();
-      if (userText.isNotEmpty && assistantText.isNotEmpty) {
-        emit(
-          state.copyWith(
-            turns: List.unmodifiable(<ConversationTurn>[
-              ...state.turns,
-              ConversationTurn(user: userText, assistant: assistantText),
-            ]),
-            transcript: '',
-            response: '',
-          ),
-        );
+
+      final assistantText = responseBuffer.toString().trim();
+      final committed = ConversationTurn(
+        user: transcript.trim(),
+        assistant: assistantText,
+        hadSurface: sawSurface,
+      );
+      emit(state.copyWith(
+        turns: List.unmodifiable(<ConversationTurn>[
+          ...state.turns,
+          committed,
+        ]),
+        transcript: '',
+        response: '',
+        thinkingTrace: assistantText,
+      ));
+
+      // If the agent emitted a surface, pause for verification. The
+      // ConfirmActionBar inside the surface (or the auto-timer if the
+      // model didn't include one) drives the next transition.
+      if (sawSurface) {
+        emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
+        if (!_surfaceHasConfirmBar()) {
+          // Lightweight reply with a surface but no explicit confirm —
+          // treat as Ask-style and auto-advance after a quiet window.
+          _autoConfirmTimer = Timer(
+            const Duration(seconds: 3),
+            confirmSurface,
+          );
+        }
       }
     } on Object catch (e) {
       if (_conversationActive) {
-        emit(
-          state.copyWith(
-            stage: AssistantStage.error,
-            errorMessage: e.toString(),
-          ),
-        );
+        emit(state.copyWith(
+          stage: AssistantStage.error,
+          errorMessage: e.toString(),
+        ));
         _conversationActive = false;
       }
     } finally {
@@ -475,11 +600,61 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
   }
 
-  /// Return [packs] reordered so the pack that speaks [langCode] is first,
-  /// with the rest in their original order. The first pack becomes the
-  /// script-ambiguous fallback inside TtsService — keeping every pack in
-  /// the list means the engine bank gets fully populated for code-mixed
-  /// regions (India, Switzerland, UAE, etc.).
+  /// Routed from `ConfirmActionBar` taps via `SurfaceController.onSubmit`.
+  /// genui packages each tap as a `ChatMessage` whose only part is a
+  /// `UiInteractionPart` containing a JSON envelope of the form
+  /// `{ "version": "v0.9", "action": { "name": "confirm", ... } }`.
+  void _onSurfaceSubmit(genui.ChatMessage message) {
+    final actionName = _firstActionName(message);
+    if (actionName == null) return;
+    switch (actionName) {
+      case 'confirm':
+        confirmSurface();
+      case 'reject':
+        rejectSurface();
+      default:
+        if (kDebugMode) {
+          debugPrint('[AssistantCubit] ignoring surface action "$actionName"');
+        }
+    }
+  }
+
+  static String? _firstActionName(genui.ChatMessage message) {
+    for (final part in message.parts.uiInteractionParts) {
+      try {
+        final decoded = jsonDecode(part.interaction);
+        if (decoded is Map) {
+          final action = decoded['action'];
+          if (action is Map) {
+            final name = action['name'];
+            if (name is String) return name;
+          }
+        }
+      } on FormatException {
+        // Drop malformed envelopes; the surface keeps working.
+      }
+    }
+    return null;
+  }
+
+  /// Walk the live surface tree looking for any ConfirmActionBar
+  /// component. We use this to decide whether the model is asking for
+  /// explicit confirmation (Triage-style) or whether we should
+  /// auto-advance after a quiet window (Ask-style).
+  bool _surfaceHasConfirmBar() {
+    try {
+      final ctx = _surfaceController.contextFor(surfaceId);
+      final def = ctx.definition.value;
+      if (def == null) return false;
+      for (final component in def.components.values) {
+        if (component.type == 'ConfirmActionBar') return true;
+      }
+      return false;
+    } on Object {
+      return false;
+    }
+  }
+
   List<VoiceModelPack> _orderedTtsPacks(
     List<VoiceModelPack> packs,
     String? langCode,
@@ -499,14 +674,9 @@ class AssistantCubit extends Cubit<AssistantState> {
     return [...preferred, ...rest];
   }
 
-  /// Index of the character *after* the last sentence-terminating
-  /// punctuation in [text]. Returns 0 if no boundary is present, in
-  /// which case the caller keeps buffering until more tokens arrive.
-  /// Handles English (`.!?…`), Devanagari (`।`), CJK (`。！？`), and
-  /// newlines.
   int _lastSentenceBoundary(String text) {
     if (text.isEmpty) return 0;
-    final pattern = RegExp(r'[.!?…।。！？]+["\u201D\u2019\)\]]?\s|\n+');
+    final pattern = RegExp(r'[.!?…।。！？]+["”’\)\]]?\s|\n+');
     var lastEnd = 0;
     for (final match in pattern.allMatches(text)) {
       lastEnd = match.end;
@@ -517,8 +687,13 @@ class AssistantCubit extends Cubit<AssistantState> {
   @override
   Future<void> close() async {
     _conversationActive = false;
+    _autoConfirmTimer?.cancel();
     await _sttSub?.cancel();
     await _llmSub?.cancel();
+    await _surfaceUpdatesSub?.cancel();
+    await _actionSub.cancel();
+    _transport?.dispose();
+    _surfaceController.dispose();
     await _recorder.dispose();
     return super.close();
   }

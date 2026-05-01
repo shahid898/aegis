@@ -77,6 +77,36 @@ dependencies:
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2
 
+  # Camera capture for triage (responder photographs damage / casualties).
+  # Optional in Ask Mode; required in Triage Mode.
+  camera: ^0.11.0
+
+  # Image scaling — JPEG 512px longest edge before sending to Gemma 4.
+  image: ^4.3.0
+
+  # YAML frontmatter parser for the Agent Skills registry. Each
+  # SKILL.md has frontmatter `name:` + `description:` that gets
+  # concatenated into Gemma 4's system prompt at chat-session
+  # creation, so capabilities are discoverable without a code change.
+  yaml: ^3.1.2
+
+  # Flutter Labs' generative-UI framework (BSD-3) — implements the
+  # A2UI v0.9 protocol (https://a2ui.org). We use:
+  #   * SurfaceController + Catalog + CatalogItem for the dynamic
+  #     widget registry (basic catalog + 9 Aegis-specific cards).
+  #   * A2uiTransportAdapter to parse Gemma 4's streaming token
+  #     output into A2UI messages on the fly.
+  #   * Surface widget to render the live tree the model is composing.
+  # Pulls audioplayers + video_player; that's fine — we will reuse
+  # them for survivor-statement playback in a later sprint.
+  genui: ^0.9.0
+
+  # Schema builder used by genui's CatalogItem to declare the
+  # JSON shape of each card's `data` payload. Transitive via
+  # genui, but we use the `S` shortcut directly in our
+  # aegis_catalog.dart so the linter wants it as a direct dep.
+  json_schema_builder: ^0.1.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -92,3 +122,13 @@ flutter:
   assets:
     - assets/languages/
     - assets/geo/
+    # Agent Skills registry. Each subdirectory is one skill; the
+    # SKILL.md frontmatter is concatenated into Gemma 4's system
+    # prompt as a discoverable capabilities catalog. Adding a new
+    # skill = adding a new SKILL.md, no Dart code change needed.
+    - assets/skills/compose-briefing/
+    - assets/skills/plan-evacuation-route/
+    - assets/skills/grade-damage-hazus/
+    - assets/skills/intake-survivor-statement/
+    - assets/skills/generate-ics-209/
+    - assets/skills/match-mesh-beacon/

@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:genui/genui.dart' show Catalog;
 
+import '../skills/skills_registry.dart';
 import 'model_pack.dart';
 import 'model_registry.dart';
+import 'triage_input.dart';
 
 /// Reserved Gemma / LiteRT-LM tokens that should never appear in a final
 /// user-facing reply. We've observed at least `<unused3>` and `<mask>`
@@ -171,9 +174,23 @@ String _buildSystemPrompt(String? languageCode) {
 /// drop the cached chat explicitly (e.g. when the UI flips back to
 /// idle).
 class LlmService {
-  LlmService(this._registry);
+  LlmService(
+    this._registry, {
+    SkillsRegistry? skills,
+    Catalog? triageCatalog,
+  })  : _skills = skills ?? SkillsRegistry(),
+        _triageCatalog = triageCatalog;
 
   final ModelRegistry _registry;
+  final SkillsRegistry _skills;
+
+  /// Render-time catalog handed in by the host app. We only use its
+  /// [Catalog.systemPromptFragments] and [Catalog.catalogId] to ground
+  /// the model — the actual rendering happens in the view layer.
+  /// Null until [setTriageCatalog] is called; populated by the cubit
+  /// at construction so the model and the renderer stay in lockstep
+  /// on which catalog is authoritative.
+  Catalog? _triageCatalog;
 
   VoiceModelPack? _pack;
   InferenceModel? _model;
@@ -181,6 +198,18 @@ class LlmService {
   bool _installed = false;
   Future<void>? _loadFuture;
   String? _preferredLanguage;
+
+  /// Exposed so callers (eg. an app-bootstrap path) can preload the
+  /// catalog before the first user turn. Loading is also lazy on first
+  /// use, so this is purely an optimisation.
+  SkillsRegistry get skills => _skills;
+
+  /// Bind the render-time catalog. Called once by the host (eg. the
+  /// triage cubit at construction). The next [triageStream] turn will
+  /// pick up the new catalog id and system-prompt fragments.
+  void setTriageCatalog(Catalog catalog) {
+    _triageCatalog = catalog;
+  }
 
   /// The backend we'll try next time we (re)load the model. We start on GPU
   /// because real Adreno/Mali phones can run the WebGPU executor + OpenCL
@@ -405,6 +434,171 @@ class LlmService {
     }
   }
 
+  /// Crisis-loop streaming entry point. Unlike [askStream] (free
+  /// text), this builds a structured-output session, injects the
+  /// skills catalog, and streams JSON tokens that the
+  /// [A2uiTransportAdapter] parses incrementally.
+  ///
+  /// **Why a one-shot session per turn.**
+  ///   * The chat session in [_ensureChat] is text-only and uses the
+  ///     plain Aegis system prompt. Triage Mode needs (a) the skills
+  ///     catalog in the system prompt, (b) optional audio modality
+  ///     when [TriageInput.audioWav] is present, and (c) the JSON
+  ///     output schema baked in.
+  ///   * flutter_gemma keeps exactly one active session per model
+  ///     (see [_transcribeOnce] for the same constraint). So we tear
+  ///     the chat down before the triage session is built and let
+  ///     the chat lazily rebuild on the next [askStream].
+  ///   * Multi-turn triage memory lives in the Isar incident log,
+  ///     surfaced via [TriageInput.incidentLog]. The agent reads the
+  ///     log as part of the system prompt at every turn — no
+  ///     conversational state has to survive between sessions.
+  Stream<String> triageStream(TriageInput input, {int maxTokens = 2048}) async* {
+    try {
+      yield* _triageStreamOnce(input, maxTokens: maxTokens);
+    } on Object catch (e) {
+      if (!await _shouldFallbackToCpu(e)) rethrow;
+      yield* _triageStreamOnce(input, maxTokens: maxTokens);
+    }
+  }
+
+  Stream<String> _triageStreamOnce(
+    TriageInput input, {
+    required int maxTokens,
+  }) async* {
+    await _disposeChat();
+    final model = await _ensureModel(maxTokens: maxTokens);
+    final systemPrompt = await _buildTriageSystemPrompt();
+    final userPrompt = _buildTriageUserPrompt(input);
+
+    final session = await model.createSession(
+      // Triage outputs are structured JSON, not creative prose. Lower
+      // temperature keeps the model from drifting into fields the
+      // schema doesn't recognise. Not zero — we still want the
+      // spoken_response and thinking_trace to read like natural
+      // language.
+      temperature: 0.4,
+      topK: 40,
+      topP: 0.9,
+      enableAudioModality: input.hasAudio,
+      systemInstruction: systemPrompt,
+    );
+    try {
+      final message = input.hasAudio
+          ? Message.withAudio(
+              text: userPrompt,
+              audioBytes: input.audioWav!,
+              isUser: true,
+            )
+          : Message.text(text: userPrompt, isUser: true);
+      await session.addQueryChunk(message);
+      yield* session
+          .getResponseAsync()
+          .where((token) => token.isNotEmpty);
+    } finally {
+      try {
+        await session.close();
+      } on Object {
+        // best-effort; the slot will be reclaimed when the next
+        // session is built.
+      }
+    }
+  }
+
+  Future<String> _buildTriageSystemPrompt() async {
+    // Tight token budget — Gemma 4 E2B litertlm bundles ship with a
+    // small KV cache (1024-2048 tokens). Anything we put here is paid
+    // every turn, so we trade prompt verbosity for response headroom.
+    // The skills catalog is condensed to ids + 1-line summaries; the
+    // genui rules are skipped (the cards' JSON Schemas teach the
+    // model the shape from `exampleData`).
+    await _skills.load();
+    final skillsLine = _skills.buildSkillsOneLiner();
+    final lang = _preferredLanguage;
+    final langName = lang == null ? null : _languageNames[lang];
+    final speakRule = langName == null
+        ? 'Reply in the user\'s language.'
+        : 'Reply in $langName.';
+    final catalogId = _triageCatalog?.catalogId ?? 'unset';
+
+    return '''
+You are Aegis, an offline emergency assistant. Reply in plain prose
+for normal questions. $speakRule Keep replies short. For
+life-threatening situations, tell the user to call emergency services.
+
+For triage scenes (damage, casualties, evacuation, briefing, capture
+evidence) ALSO emit A2UI v0.9 JSON envelopes inline:
+
+```json
+{"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
+```
+
+```json
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","children":["c1","c2"]},{"id":"c1","component":"DamageCard","category":2,"fema_scale":"HAZUS_MODERATE","description":"..."},{"id":"c2","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Reject"}]}}
+```
+
+Cards: DamageCard, CasualtyCard, BeaconMatchCard, ResourceRequestCard,
+ConfirmActionBar, ThinkingTraceDrawer, MapFragment, GoBagChecklist,
+ShelterPreviewCard. Layouts: Column, Row, Text. Root id MUST be "root".
+ConfirmActionBar required for triage reports.
+
+$skillsLine
+
+Never invent locations or identifiers not in the user's message.
+''';
+  }
+
+  /// Hard ceiling on the incident-log slice we paste into the per-turn
+  /// prompt. Char count is a coarse stand-in for tokens (≈4 chars per
+  /// token). Anything older gets dropped — the most recent turns
+  /// matter more for follow-up questions, and the engine cap is the
+  /// real constraint.
+  static const int _incidentLogCharBudget = 1200;
+
+  String _buildTriageUserPrompt(TriageInput input) {
+    final buf = StringBuffer();
+    final user = input.userText.trim().isEmpty
+        ? '(no spoken text — see attached evidence)'
+        : input.userText.trim();
+    buf.writeln('User: $user');
+
+    // Only include a short evidence line when something was actually
+    // captured. Empty fields just waste tokens.
+    final evidence = <String>[];
+    if (input.hasAudio) evidence.add('audio attached');
+    if (input.hasImage) evidence.add('image attached');
+    if (input.gpsContext != null) evidence.add('gps=${input.gpsContext}');
+    if (evidence.isNotEmpty) {
+      buf.writeln('Evidence: ${evidence.join(', ')}');
+    }
+
+    if (input.incidentLog.isNotEmpty) {
+      // Walk the log newest-to-oldest accumulating chars; reverse so
+      // the model sees oldest-first while still favouring recent turns
+      // when the budget is tight.
+      final reversed = input.incidentLog.reversed.toList();
+      final kept = <String>[];
+      var used = 0;
+      for (final entry in reversed) {
+        final next = used + entry.length + 3;
+        if (next > _incidentLogCharBudget) break;
+        kept.add(entry);
+        used = next;
+      }
+      if (kept.isNotEmpty) {
+        buf.writeln('Recent context:');
+        for (final entry in kept.reversed) {
+          buf.writeln('- $entry');
+        }
+      }
+    }
+
+    if (input.requestId != null) {
+      buf.writeln('req_id: ${input.requestId}');
+    }
+    return buf.toString();
+  }
+
   Future<String> _askOnce(String userText, {required int maxTokens}) async {
     final chat = await _ensureChat(maxTokens: maxTokens);
     _logHistorySnapshot(chat, label: 'ask', incoming: userText);
@@ -621,7 +815,7 @@ Instructions:
       // flag is "not reliable for all model bundles"). Gallery's
       // `BooleanSwitchConfig(key = ENABLE_THINKING, defaultValue =
       // false)` agrees with this tradeoff.
-      isThinking: false,
+      isThinking: true,
       modelType: ModelType.gemmaIt,
       systemInstruction: _buildSystemPrompt(_preferredLanguage),
     );

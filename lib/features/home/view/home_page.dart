@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:genui/genui.dart' as genui;
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -13,14 +14,19 @@ import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
 import '../cubit/assistant_cubit.dart';
 
-/// Home screen — the single "Ask Aegis" surface.
+/// Home screen — the single Aegis surface.
 ///
-/// - Big circular push-to-talk button (hold to speak, release to ask).
-/// - Live transcript of the user's utterance.
-/// - Streaming LLM response bubble.
-/// - Long-press the button (or double-tap) to trigger the SOS fallback:
-///   dial the first saved emergency contact, copy the current location
-///   to the clipboard so the user can paste it into a message.
+/// One screen does it all: chat with the assistant, see the streaming
+/// transcript, hear the spoken reply, and — when the situation calls for
+/// it — interact with a generated A2UI surface (capture-evidence
+/// prompts, ICS-209 cards, evacuation plans, etc.) inline in the same
+/// chat thread. The agent decides whether to render a surface; the UI
+/// renders it inline when present and shows a plain reply bubble when
+/// not.
+///
+/// - Big circular push-to-talk button (tap to start, tap again to stop).
+/// - Long-press the button to trigger the SOS fallback: dial the first
+///   saved emergency contact, copy the current location to the clipboard.
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -58,7 +64,7 @@ class _HomeView extends StatelessWidget {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _Header(state: state),
+                  const _Header(),
                   const SizedBox(height: 20),
                   Expanded(child: _TranscriptArea(state: state)),
                   const SizedBox(height: 16),
@@ -92,14 +98,15 @@ class _HomeView extends StatelessWidget {
     AssistantStage.transcribing => 'Transcribing…',
     AssistantStage.thinking => 'Thinking… tap to interrupt',
     AssistantStage.speaking => 'Aegis is speaking · tap to stop',
+    AssistantStage.awaitingConfirmation =>
+        'Review the card above · confirm or reject',
     AssistantStage.degraded => 'Voice disabled — tap SOS',
     AssistantStage.error => 'Tap to retry',
   };
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.state});
-  final AssistantState state;
+  const _Header();
 
   @override
   Widget build(BuildContext context) {
@@ -118,8 +125,11 @@ class _Header extends StatelessWidget {
 }
 
 /// Renders both the running [AssistantState.turns] history and the
-/// in-flight transcript / response bubbles. Owns its own [ScrollController]
-/// so we can pin the view to the most recent bubble as the model streams.
+/// in-flight transcript / response bubbles. Owns its own
+/// [ScrollController] so we pin to the most recent bubble as the
+/// model streams. When the agent emits a surface for the in-flight
+/// turn, the live `genui.Surface` widget renders inline in place of
+/// the streaming text bubble.
 class _TranscriptArea extends StatefulWidget {
   const _TranscriptArea({required this.state});
   final AssistantState state;
@@ -139,7 +149,9 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     final grew =
         next.turns.length != old.turns.length ||
         next.transcript.length != old.transcript.length ||
-        next.response.length != old.response.length;
+        next.response.length != old.response.length ||
+        next.surfaceReady != old.surfaceReady ||
+        next.stage != old.stage;
     if (grew) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_controller.hasClients) return;
@@ -164,7 +176,9 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     final hasTranscript = state.transcript.isNotEmpty;
     final hasResponse = state.response.isNotEmpty;
     final hasHistory = state.turns.isNotEmpty;
-    final hasInflight = hasTranscript || hasResponse;
+    final hasSurface = state.surfaceReady;
+    final isVerifying = state.stage == AssistantStage.awaitingConfirmation;
+    final hasInflight = hasTranscript || hasResponse || hasSurface;
 
     if (!hasInflight && !hasHistory) {
       return const Center(
@@ -207,12 +221,17 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   align: CrossAxisAlignment.start,
                   background: Colors.white,
                 ),
+                if (turn.hadSurface) ...[
+                  const SizedBox(height: 8),
+                  const _SurfaceArchivedChip(),
+                ],
               ],
             ),
           );
         }
 
-        // In-flight turn: streaming transcript and/or partial response.
+        // In-flight turn: streaming transcript, partial response, and/or
+        // a live A2UI surface. The agent may emit any subset.
         return Padding(
           padding: EdgeInsets.only(top: isFirst ? 0 : 16),
           child: Column(
@@ -234,10 +253,158 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   background: Colors.white,
                 ),
               ],
+              if (hasSurface) ...[
+                const SizedBox(height: 12),
+                const _LiveSurface(),
+              ],
+              if (isVerifying) ...[
+                const SizedBox(height: 12),
+                _ThinkingTraceDrawer(trace: state.thinkingTrace),
+                const SizedBox(height: 12),
+                const _VerificationActions(),
+              ],
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// Live A2UI surface for the in-flight turn. Bound to the cubit's
+/// [genui.SurfaceController] via `contextFor(surfaceId)`. Cards render
+/// progressively as Gemma 4 streams JSON envelopes — the user sees a
+/// damage card pop in, then a casualty card, then a confirm bar, in
+/// real time.
+class _LiveSurface extends StatelessWidget {
+  const _LiveSurface();
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.read<AssistantCubit>().surfaceController;
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+        ),
+      ),
+      child: genui.Surface(
+        surfaceContext: controller.contextFor(AssistantCubit.surfaceId),
+      ),
+    );
+  }
+}
+
+class _SurfaceArchivedChip extends StatelessWidget {
+  const _SurfaceArchivedChip();
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: AegisColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.dashboard_customize_outlined, size: 14),
+            SizedBox(width: 6),
+            Text(
+              'Action card was shown',
+              style: TextStyle(
+                fontSize: 12,
+                color: AegisColors.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ThinkingTraceDrawer extends StatefulWidget {
+  const _ThinkingTraceDrawer({required this.trace});
+
+  final String trace;
+
+  @override
+  State<_ThinkingTraceDrawer> createState() => _ThinkingTraceDrawerState();
+}
+
+class _ThinkingTraceDrawerState extends State<_ThinkingTraceDrawer> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.psychology_alt_outlined),
+            title: const Text('Reasoning trace'),
+            subtitle: Text(_open
+                ? 'Tap to hide'
+                : 'Inspect why Aegis composed this card'),
+            trailing: Icon(_open ? Icons.expand_less : Icons.expand_more),
+            onTap: () => setState(() => _open = !_open),
+          ),
+          if (_open)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                widget.trace.isEmpty ? '(no trace recorded)' : widget.trace,
+                style: const TextStyle(
+                  color: AegisColors.onSurfaceMuted,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VerificationActions extends StatelessWidget {
+  const _VerificationActions();
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<AssistantCubit>();
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: () => cubit.rejectSurface(),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Reject'),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: FilledButton.icon(
+            onPressed: cubit.confirmSurface,
+            icon: const Icon(Icons.check),
+            label: const Text('Confirm'),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -394,13 +561,10 @@ class _PttButton extends StatelessWidget {
 
     final messenger = ScaffoldMessenger.of(context);
 
-    // Stop any ongoing audio before we launch out of the app.
     if (context.mounted) {
       await context.read<AssistantCubit>().cancel();
     }
 
-    // Best-effort: copy current GPS + saved region to the clipboard so the
-    // user can paste into a message once the dialer opens.
     String? locationText;
     try {
       final pos = await Geolocator.getCurrentPosition(

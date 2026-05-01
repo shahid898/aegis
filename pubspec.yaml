@@ -70,6 +70,12 @@ dependencies:
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2
 
+  # Phase 2 wake-app: alarm UX, vibration, wake-lock and full-screen-intent notifications.
+  # Audio playback for the alarm reuses just_audio (already declared above).
+  flutter_local_notifications: ^19.5.0
+  vibration: ^3.1.8
+  wakelock_plus: ^1.4.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

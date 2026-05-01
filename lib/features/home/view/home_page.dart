@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -5,6 +6,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/alert/alert_bridge.dart';
+import '../../../core/alert/alert_event.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
@@ -50,6 +53,11 @@ class _HomeView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Debug-only entry point for the SMS-alert pipeline. Tapping fires
+      // `AlertBridge.simulate(...)` so we can exercise FunctionGemma routing
+      // and the PENDING/CONFIRMED state machine without a real telco. The FAB
+      // is dropped in release builds via `kDebugMode`.
+      floatingActionButton: kDebugMode ? const _AlertSimulatorFab() : null,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -445,3 +453,280 @@ class _PttButton extends StatelessWidget {
     }
   }
 }
+
+/// Floating action button shown only in debug builds. Opens a sheet with
+/// canned alert payloads + a free-text option that drive
+/// `AlertBridge.simulate(...)` so we can exercise the wake-app pipeline
+/// without a real SMS / SIM.
+class _AlertSimulatorFab extends StatelessWidget {
+  const _AlertSimulatorFab();
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton.extended(
+      heroTag: 'aegis-debug-alert-sim',
+      backgroundColor: AegisColors.danger,
+      foregroundColor: Colors.white,
+      icon: const Icon(Icons.bolt),
+      label: const Text('Simulate alert'),
+      onPressed: () => _open(context),
+    );
+  }
+
+  Future<void> _open(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => const _AlertSimulatorSheet(),
+    );
+  }
+}
+
+class _AlertSimulatorSheet extends StatefulWidget {
+  const _AlertSimulatorSheet();
+
+  @override
+  State<_AlertSimulatorSheet> createState() => _AlertSimulatorSheetState();
+}
+
+class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
+  late final TextEditingController _bodyCtrl;
+  late final TextEditingController _senderCtrl;
+  AlertSeverity _severity = AlertSeverity.critical;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bodyCtrl = TextEditingController(text: _presets.first.body);
+    _senderCtrl = TextEditingController(text: _presets.first.sender);
+  }
+
+  @override
+  void dispose() {
+    _bodyCtrl.dispose();
+    _senderCtrl.dispose();
+    super.dispose();
+  }
+
+  void _applyPreset(_SimPreset preset) {
+    setState(() {
+      _bodyCtrl.text = preset.body;
+      _senderCtrl.text = preset.sender;
+      _severity = preset.severity;
+    });
+  }
+
+  Future<void> _fire() async {
+    if (_busy) return;
+    final body = _bodyCtrl.text.trim();
+    if (body.isEmpty) return;
+    final sender = _senderCtrl.text.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    setState(() => _busy = true);
+    try {
+      final result = await sl<AlertBridge>().simulate(
+        body: body,
+        sender: sender.isEmpty ? null : sender,
+        severity: _severity,
+      );
+      if (!mounted) return;
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result == null
+                ? 'simulate() returned null — check the native logs.'
+                : 'Simulated alert ${result.id} delivered. '
+                    'Watch logcat for the FunctionGemma verdict.',
+          ),
+        ),
+      );
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('simulate() failed: ${e.message ?? e.code}')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Simulate emergency alert',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Injects a synthetic AlertEvent through the native bridge — '
+              'exercises FunctionGemma + the PENDING/CONFIRMED siren state '
+              'machine without a real SMS.',
+              style: TextStyle(
+                color: AegisColors.onSurfaceMuted,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final preset in _presets)
+                  ActionChip(
+                    label: Text(preset.label),
+                    avatar: Icon(preset.icon, size: 18),
+                    onPressed: _busy ? null : () => _applyPreset(preset),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _senderCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Sender',
+                hintText: 'e.g. IMD, NDMA, 12345',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _bodyCtrl,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: 'Body',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<AlertSeverity>(
+              initialValue: _severity,
+              decoration: const InputDecoration(
+                labelText: 'Severity (UI hint only)',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: AlertSeverity.critical,
+                  child: Text('Critical (CMAS Presidential / IMD red)'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.high,
+                  child: Text('High'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.medium,
+                  child: Text('Medium'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.low,
+                  child: Text('Low'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.unknown,
+                  child: Text('Unknown'),
+                ),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (value) {
+                      if (value != null) setState(() => _severity = value);
+                    },
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: _busy ? null : _fire,
+              style: FilledButton.styleFrom(
+                backgroundColor: AegisColors.danger,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              icon: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.send),
+              label: Text(_busy ? 'Firing…' : 'Fire simulated alert'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Preset payloads for the alert simulator. The first one is loaded into
+/// the form on open; the others are one-tap chips.
+class _SimPreset {
+  const _SimPreset({
+    required this.label,
+    required this.icon,
+    required this.sender,
+    required this.body,
+    required this.severity,
+  });
+
+  final String label;
+  final IconData icon;
+  final String sender;
+  final String body;
+  final AlertSeverity severity;
+}
+
+const List<_SimPreset> _presets = [
+  _SimPreset(
+    label: 'Cyclone (escalate)',
+    icon: Icons.cyclone,
+    sender: 'IMD',
+    body:
+        'Cyclone Biparjoy approaching Mumbai coast. Evacuate to designated '
+        'shelters NOW. — IMD',
+    severity: AlertSeverity.critical,
+  ),
+  _SimPreset(
+    label: 'Tsunami (escalate)',
+    icon: Icons.tsunami,
+    sender: 'NDMA',
+    body:
+        'TSUNAMI WARNING: Move to high ground immediately. Coastal areas '
+        'evacuate now.',
+    severity: AlertSeverity.critical,
+  ),
+  _SimPreset(
+    label: 'Earthquake drill (dismiss)',
+    icon: Icons.science_outlined,
+    sender: 'TEST',
+    body:
+        'Drill alert: this is a TEST message, no action required. Reply STOP '
+        'to opt out.',
+    severity: AlertSeverity.medium,
+  ),
+  _SimPreset(
+    label: 'Promo decoy (dismiss)',
+    icon: Icons.local_offer_outlined,
+    sender: 'PROMO',
+    body:
+        'EMERGENCY SALE 70 percent off. Shop now at example.com — limited '
+        'time only.',
+    severity: AlertSeverity.unknown,
+  ),
+];

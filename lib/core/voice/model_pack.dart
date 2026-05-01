@@ -47,6 +47,7 @@ class VoiceModelPack {
     this.speakerId = 0,
     this.sampleRateHint,
     this.isArchive = true,
+    this.requiresHfAuth = false,
   });
 
   /// Stable identifier used in storage + DI (e.g. `tts-piper-en_US-lessac`).
@@ -104,6 +105,24 @@ class VoiceModelPack {
   /// primary artifact (e.g. a flutter_gemma `.task` file) which we copy
   /// verbatim to `rootDirName/modelFile.relativePath`.
   final bool isArchive;
+
+  /// When `true`, the download URL points at a HuggingFace gated repo
+  /// (e.g. `litert-community/functiongemma-270m-ft-mobile-actions`).
+  /// `ModelPackRepository` will attach `Authorization: Bearer <token>`
+  /// using the value of `--dart-define=HF_TOKEN=...` (or surface a clear
+  /// "accept the license + provide a token" error if it is missing).
+  ///
+  /// Required workflow for end users / dev builds:
+  ///   1. Visit the HuggingFace model page and click "Agree and access
+  ///      repository" once on the user's account.
+  ///   2. Generate a read-only token at huggingface.co/settings/tokens.
+  ///   3. Build the app with `flutter run --dart-define=HF_TOKEN=hf_xxx`
+  ///      (or pipe the token through any other secret-injection mechanism
+  ///      and forward it as the `HF_TOKEN` define).
+  ///
+  /// Open-license packs leave this `false` so the repository sends the
+  /// download anonymously.
+  final bool requiresHfAuth;
 }
 
 /// Plan for a given region: which packs we *want* to install to give the

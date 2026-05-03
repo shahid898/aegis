@@ -205,6 +205,180 @@ final CatalogItem resourceRequestCard = _buildCard(
 ]''',
 );
 
+/// Triage intake — the entry point for an explicit triage report.
+/// Rendered when the user taps "Start triage" in the home header
+/// (the cubit pushes a synthetic createSurface + updateComponents
+/// containing this card; no LLM round-trip).
+///
+/// Three input rails — photo, audio, text — and a Submit action that
+/// hands the gathered evidence to the LLM for analysis. We dispatch
+/// distinct action names so the cubit can route to the right device
+/// API (camera, recorder, text sheet) without parsing strings.
+final CatalogItem triageIntakeCard = CatalogItem(
+  name: 'TriageIntakeCard',
+  dataSchema: S.object(
+    description: 'The triage intake form. Lets the user attach a '
+        'photo, voice note, and/or text description before the agent '
+        'analyses the evidence.',
+    properties: {
+      'prompt': S.string(
+        description: 'A short instruction shown above the input rails.',
+      ),
+      'has_photo': S.boolean(
+        description: 'True if a photo has been attached to this intake.',
+      ),
+      'has_audio': S.boolean(
+        description: 'True if a voice note has been recorded.',
+      ),
+      'text_value': S.string(
+        description: 'Current text description. Echoed back from the cubit '
+            'after the user types in the modal.',
+      ),
+    },
+  ),
+  exampleData: [
+    () => '''
+[
+  {
+    "id": "root",
+    "component": "TriageIntakeCard",
+    "prompt": "Attach a photo, voice note, or describe the scene."
+  }
+]''',
+  ],
+  widgetBuilder: (itemContext) {
+    final data = itemContext.data as Map<String, Object?>;
+    final prompt = (data['prompt'] as String?) ??
+        'Attach a photo, voice note, or describe the scene.';
+    final hasPhoto = (data['has_photo'] as bool?) ?? false;
+    final hasAudio = (data['has_audio'] as bool?) ?? false;
+    final textValue = (data['text_value'] as String?) ?? '';
+    final ready = hasPhoto || hasAudio || textValue.trim().isNotEmpty;
+
+    void dispatch(String name) {
+      itemContext.dispatchEvent(
+        UserActionEvent(name: name, sourceComponentId: itemContext.id),
+      );
+    }
+
+    return _AegisCard(
+      icon: Icons.medical_information_outlined,
+      iconColor: Colors.deepPurple,
+      title: 'Triage intake',
+      subtitle: prompt,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _IntakeChip(
+                  icon: Icons.photo_camera_outlined,
+                  label: hasPhoto ? 'Photo ✓' : 'Photo',
+                  onTap: () => dispatch('intake_photo'),
+                  attached: hasPhoto,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _IntakeChip(
+                  icon: Icons.mic_none_outlined,
+                  label: hasAudio ? 'Voice ✓' : 'Voice',
+                  onTap: () => dispatch('intake_audio'),
+                  attached: hasAudio,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _IntakeChip(
+                  icon: Icons.edit_note_outlined,
+                  label: textValue.isEmpty ? 'Text' : 'Text ✓',
+                  onTap: () => dispatch('intake_text'),
+                  attached: textValue.isNotEmpty,
+                ),
+              ),
+            ],
+          ),
+          if (textValue.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.deepPurple.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                textValue,
+                style: Theme.of(itemContext.buildContext).textTheme.bodySmall,
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            onPressed: ready ? () => dispatch('intake_submit') : null,
+            icon: const Icon(Icons.auto_awesome),
+            label: const Text('Analyse with Aegis'),
+          ),
+        ],
+      ),
+      accentColor: Colors.deepPurple,
+    );
+  },
+);
+
+class _IntakeChip extends StatelessWidget {
+  const _IntakeChip({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    required this.attached,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool attached;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(
+          color: attached
+              ? Colors.deepPurple.withValues(alpha: 0.10)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: attached
+                ? Colors.deepPurple
+                : Colors.deepPurple.withValues(alpha: 0.30),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 22,
+                color: attached ? Colors.deepPurple : Colors.deepPurple),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: attached ? FontWeight.w600 : FontWeight.w400,
+                color: Colors.deepPurple,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Confirm / Reject bar. Emits `UserActionEvent`s with `name: "confirm"`
 /// or `name: "reject"` — [TriageCubit] listens on
 /// [SurfaceController.onSubmit] and routes accordingly.
@@ -524,6 +698,7 @@ Catalog buildAegisCatalog() {
     systemPromptFragments: [_aegisCatalogRules],
   ).copyWith(
     newItems: [
+      triageIntakeCard,
       damageCard,
       casualtyCard,
       beaconMatchCard,

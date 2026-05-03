@@ -77,11 +77,14 @@ dependencies:
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2
 
-  # Camera capture for triage (responder photographs damage / casualties).
-  # Optional in Ask Mode; required in Triage Mode.
-  camera: ^0.11.0
+  # Photo capture for triage intake. We use `image_picker` rather than
+  # the lower-level `camera` plugin because all we need is a one-shot
+  # capture-and-return — no live preview UI. Pulls in the system
+  # camera/gallery picker on both Android and iOS.
+  image_picker: ^1.1.2
 
-  # Image scaling — JPEG 512px longest edge before sending to Gemma 4.
+  # Image scaling — JPEG 512px longest edge before sending to Gemma 4
+  # so the prompt's image-token budget stays predictable.
   image: ^4.3.0
 
   # YAML frontmatter parser for the Agent Skills registry. Each

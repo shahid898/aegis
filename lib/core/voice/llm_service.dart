@@ -471,6 +471,25 @@ class LlmService {
     final systemPrompt = await _buildTriageSystemPrompt();
     final userPrompt = _buildTriageUserPrompt(input);
 
+    if (kDebugMode) {
+      // Coarse token estimate: the litert tokenizer averages about 4
+      // chars / token for English; a touch lower for code-heavy text.
+      // We log estimated and char counts so a future overflow is
+      // visible BEFORE the engine reports INVALID_ARGUMENT.
+      final sysChars = systemPrompt.length;
+      final userChars = userPrompt.length;
+      final estTokens = ((sysChars + userChars) / 4).ceil();
+      debugPrint(
+        '[Aegis][LLM] triageStream begin '
+        'sys=${sysChars}c user=${userChars}c '
+        '~est=${estTokens}tok max=$maxTokens '
+        'audio=${input.hasAudio} image=${input.hasImage} '
+        'log=${input.incidentLog.length}',
+      );
+      debugPrint('[Aegis][LLM] systemPrompt:\n$systemPrompt');
+      debugPrint('[Aegis][LLM] userPrompt:\n$userPrompt');
+    }
+
     final session = await model.createSession(
       // Triage outputs are structured JSON, not creative prose. Lower
       // temperature keeps the model from drifting into fields the
@@ -481,21 +500,57 @@ class LlmService {
       topK: 40,
       topP: 0.9,
       enableAudioModality: input.hasAudio,
+      enableVisionModality: input.hasImage,
       systemInstruction: systemPrompt,
     );
+    final raw = StringBuffer();
+    var tokenCount = 0;
+    final stopwatch = Stopwatch()..start();
     try {
-      final message = input.hasAudio
-          ? Message.withAudio(
-              text: userPrompt,
-              audioBytes: input.audioWav!,
-              isUser: true,
-            )
-          : Message.text(text: userPrompt, isUser: true);
+      // Pick the right Message variant based on what was attached.
+      // Audio takes precedence (we have a dedicated transcribe path
+      // for audio-only intake) — image rides alongside text. The
+      // 1024-token bundle ignores image bytes today, but we still
+      // pass them so a future bundle with vision can pick them up
+      // without changing the call sites.
+      final Message message;
+      if (input.hasAudio) {
+        message = Message.withAudio(
+          text: userPrompt,
+          audioBytes: input.audioWav!,
+          isUser: true,
+        );
+      } else if (input.hasImage) {
+        message = Message.withImage(
+          text: userPrompt,
+          imageBytes: input.imageJpeg!,
+          isUser: true,
+        );
+      } else {
+        message = Message.text(text: userPrompt, isUser: true);
+      }
       await session.addQueryChunk(message);
-      yield* session
-          .getResponseAsync()
-          .where((token) => token.isNotEmpty);
+      await for (final token
+          in session.getResponseAsync().where((t) => t.isNotEmpty)) {
+        if (kDebugMode) {
+          tokenCount++;
+          raw.write(token);
+        }
+        yield token;
+      }
     } finally {
+      stopwatch.stop();
+      if (kDebugMode) {
+        final preview = raw.toString();
+        final clipped =
+            preview.length > 600 ? '${preview.substring(0, 600)}…' : preview;
+        debugPrint(
+          '[Aegis][LLM] triageStream end '
+          'tokens=$tokenCount chars=${preview.length} '
+          'elapsedMs=${stopwatch.elapsedMilliseconds}',
+        );
+        debugPrint('[Aegis][LLM] rawOutput:\n$clipped');
+      }
       try {
         await session.close();
       } on Object {
@@ -523,24 +578,34 @@ class LlmService {
 
     return '''
 You are Aegis, an offline emergency assistant. Reply in plain prose
-for normal questions. $speakRule Keep replies short. For
+for normal conversation. $speakRule Keep prose short. For
 life-threatening situations, tell the user to call emergency services.
 
-For triage scenes (damage, casualties, evacuation, briefing, capture
-evidence) ALSO emit A2UI v0.9 JSON envelopes inline:
+WHEN to emit a surface: any time the user reports a hazard, damage,
+casualty, missing person, or asks for evacuation / shelter / a
+checklist. Even a one-line report ("I see a building collapsed") is
+enough — fill placeholder values for unknowns; the user will edit.
+Do NOT keep asking follow-up questions when you could draft a card
+they can correct.
 
+HOW to emit a surface: send TWO JSON envelopes back-to-back, in fenced
+code blocks, in this exact order. Emitting only `createSurface` shows
+nothing — never do that.
+
+EXAMPLE INPUT  → "I see a building collapsed."
+EXAMPLE OUTPUT →
+Drafted a damage report. Confirm or edit.
 ```json
 {"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
 ```
-
 ```json
-{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","children":["c1","c2"]},{"id":"c1","component":"DamageCard","category":2,"fema_scale":"HAZUS_MODERATE","description":"..."},{"id":"c2","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Reject"}]}}
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","children":["d","c"]},{"id":"d","component":"DamageCard","category":2,"fema_scale":"HAZUS_MODERATE","description":"Building collapse reported by user; details pending"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
 ```
 
 Cards: DamageCard, CasualtyCard, BeaconMatchCard, ResourceRequestCard,
 ConfirmActionBar, ThinkingTraceDrawer, MapFragment, GoBagChecklist,
 ShelterPreviewCard. Layouts: Column, Row, Text. Root id MUST be "root".
-ConfirmActionBar required for triage reports.
+Always include a ConfirmActionBar.
 
 $skillsLine
 
@@ -1058,6 +1123,7 @@ Instructions:
         maxTokens: maxTokens,
         preferredBackend: _preferredBackend,
         supportAudio: true,
+        supportImage: true,
       );
       _model = model;
       completer.complete();

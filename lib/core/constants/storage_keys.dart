@@ -3,6 +3,7 @@ class StorageBoxes {
 
   static const String settings = 'settings_box';
   static const String contacts = 'contacts_box';
+  static const String reports = 'reports_box';
 }
 
 class StorageKeys {

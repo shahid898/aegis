@@ -8,6 +8,7 @@ import '../features/onboarding/language/view/language_page.dart';
 import '../features/onboarding/permissions/view/permissions_page.dart';
 import '../features/onboarding/ready/view/ready_page.dart';
 import '../features/onboarding/region/view/region_page.dart';
+import '../features/reports/view/reports_page.dart';
 import '../features/splash/view/splash_page.dart';
 
 enum AppRoute {
@@ -19,7 +20,8 @@ enum AppRoute {
   contacts('/onboarding/contacts'),
   permissions('/onboarding/permissions'),
   ready('/onboarding/ready'),
-  home('/home');
+  home('/home'),
+  reports('/reports');
 
   const AppRoute(this.path);
   final String path;
@@ -63,6 +65,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: AppRoute.home.path,
       builder: (_, _) => const HomePage(),
+    ),
+    GoRoute(
+      path: AppRoute.reports.path,
+      builder: (_, _) => const ReportsPage(),
     ),
   ],
 );

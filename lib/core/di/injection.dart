@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
+import '../../features/reports/data/reports_repository.dart';
 import '../geo/country_resolver.dart';
 import '../skills/skills_registry.dart';
 import '../storage/storage_service.dart';
@@ -36,6 +37,11 @@ Future<void> configureDependencies() async {
   // "browse skills" debug screen). Loaded on first access via
   // SkillsRegistry.load() inside LlmService.triageStream.
   sl.registerSingleton<SkillsRegistry>(SkillsRegistry());
+
+  // Reports archive — confirmed triage cards land here. Opens its own
+  // Hive box at startup so the Reports page can read a fresh snapshot
+  // without an async wait.
+  sl.registerSingleton<ReportsRepository>(await ReportsRepository.open());
 
   // Voice services are lazy — engines are heavy and only needed once the
   // user lands on a screen that actually speaks/listens.

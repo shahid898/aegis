@@ -45,5 +45,16 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- Triage intake permissions. iOS prompts the user once per
+	     permission; without these strings the app crashes on the
+	     permission request itself. -->
+	<key>NSCameraUsageDescription</key>
+	<string>Aegis uses the camera to attach a photo to a triage report.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Aegis can pick an existing photo to attach to a triage report.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aegis listens to your voice so you can talk to the assistant offline.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Aegis uses your location to suggest nearby shelters and to attach coordinates to emergency reports.</string>
 </dict>
 </plist>

@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:genui/genui.dart' as genui;
 import 'package:geolocator/geolocator.dart';
+import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../app/router.dart';
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/storage_service.dart';
@@ -12,6 +17,7 @@ import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
+import '../../reports/data/reports_repository.dart';
 import '../cubit/assistant_cubit.dart';
 
 /// Home screen — the single Aegis surface.
@@ -42,6 +48,7 @@ class HomePage extends StatelessWidget {
         stt: sl<SttService>(),
         llm: sl<LlmService>(),
         tts: sl<TtsService>(),
+        reports: sl<ReportsRepository>(),
         countryCode: countryCode,
         languageCode: languageCode,
       ),
@@ -50,8 +57,143 @@ class HomePage extends StatelessWidget {
   }
 }
 
-class _HomeView extends StatelessWidget {
+/// Stateful view so we can subscribe to the cubit's intake hooks
+/// (text-input modal request + stub-button snackbars). Subscriptions
+/// live for the lifetime of the home screen.
+class _HomeView extends StatefulWidget {
   const _HomeView();
+
+  @override
+  State<_HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<_HomeView> {
+  late final AssistantCubit _cubit;
+  late final List<StreamSubscription<dynamic>> _subs;
+
+  @override
+  void initState() {
+    super.initState();
+    _cubit = context.read<AssistantCubit>();
+    _subs = [
+      _cubit.intakeTextRequests.listen((_) => _openTextEditor()),
+      _cubit.intakePhotoRequests.listen((_) => _openPhotoPicker()),
+      _cubit.intakeStubRequests.listen(_showStubMessage),
+    ];
+  }
+
+  /// Open the system image picker. We surface a small action sheet so
+  /// the user can choose between camera capture and gallery — common
+  /// triage flows want both (the responder shoots a fresh frame; the
+  /// survivor attaches a screenshot or saved image).
+  Future<void> _openPhotoPicker() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Take a photo'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Pick from gallery'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(ImageSource.gallery),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null) return;
+
+    try {
+      final picker = ImagePicker();
+      // Cap source-side resolution at 1920px so we don't load a 12MP
+      // frame into memory just to scale it back down to 512.
+      final XFile? file = await picker.pickImage(
+        source: source,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (file == null) return;
+      final bytes = await file.readAsBytes();
+      await _cubit.setIntakePhoto(bytes);
+    } on Object catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Photo capture failed: $e')),
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    super.dispose();
+  }
+
+  Future<void> _openTextEditor() async {
+    final controller = TextEditingController();
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        final viewInsets = MediaQuery.of(sheetContext).viewInsets;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(
+              16, 16, 16, viewInsets.bottom + 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Describe the scene',
+                style: Theme.of(sheetContext).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                minLines: 3,
+                maxLines: 6,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText:
+                      'eg. "Two-storey house, partial roof collapse, '
+                      'one elderly woman trapped near the front door"',
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () =>
+                    Navigator.of(sheetContext).pop(controller.text),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (result == null) return;
+    _cubit.setIntakeText(result);
+  }
+
+  void _showStubMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -92,17 +234,17 @@ class _HomeView extends StatelessWidget {
   }
 
   String _buttonHint(AssistantStage stage) => switch (stage) {
-    AssistantStage.idle => 'Tap to start · long-press for SOS',
-    AssistantStage.preparing => 'Getting ready…',
-    AssistantStage.listening => 'Listening… tap to stop',
-    AssistantStage.transcribing => 'Transcribing…',
-    AssistantStage.thinking => 'Thinking… tap to interrupt',
-    AssistantStage.speaking => 'Aegis is speaking · tap to stop',
-    AssistantStage.awaitingConfirmation =>
-        'Review the card above · confirm or reject',
-    AssistantStage.degraded => 'Voice disabled — tap SOS',
-    AssistantStage.error => 'Tap to retry',
-  };
+        AssistantStage.idle => 'Tap to start · long-press for SOS',
+        AssistantStage.preparing => 'Getting ready…',
+        AssistantStage.listening => 'Listening… tap to stop',
+        AssistantStage.transcribing => 'Transcribing…',
+        AssistantStage.thinking => 'Thinking… tap to interrupt',
+        AssistantStage.speaking => 'Aegis is speaking · tap to stop',
+        AssistantStage.awaitingConfirmation =>
+          'Review the card above · confirm or reject',
+        AssistantStage.degraded => 'Voice disabled — tap SOS',
+        AssistantStage.error => 'Tap to retry',
+      };
 }
 
 class _Header extends StatelessWidget {
@@ -110,14 +252,38 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Text('Aegis', style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 4),
-        const Text(
-          'Offline. Ready.',
-          style: TextStyle(color: AegisColors.onSurfaceMuted, fontSize: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Aegis',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Offline. Ready.',
+                style: TextStyle(
+                  color: AegisColors.onSurfaceMuted,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+        IconButton.filledTonal(
+          tooltip: 'Start triage',
+          onPressed: () => context.read<AssistantCubit>().startTriage(),
+          icon: const Icon(Icons.medical_information_outlined),
+        ),
+        const SizedBox(width: 8),
+        IconButton.filledTonal(
+          tooltip: 'Reports',
+          onPressed: () => context.push(AppRoute.reports.path),
+          icon: const Icon(Icons.assignment_outlined),
         ),
       ],
     );
@@ -223,7 +389,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                 ),
                 if (turn.hadSurface) ...[
                   const SizedBox(height: 8),
-                  const _SurfaceArchivedChip(),
+                  _SurfaceArchivedChip(turn: turn),
                 ],
               ],
             ),
@@ -298,32 +464,152 @@ class _LiveSurface extends StatelessWidget {
   }
 }
 
+/// Tappable chip on a past turn that emitted a surface. Tapping opens
+/// a modal that replays the captured A2UI messages into a private
+/// SurfaceController so the user can re-inspect what was rendered at
+/// the time. We don't keep the historical surface live in the main
+/// controller (it's already been overwritten by later turns) — instead
+/// we re-mount the messages on demand.
 class _SurfaceArchivedChip extends StatelessWidget {
-  const _SurfaceArchivedChip();
+  const _SurfaceArchivedChip({required this.turn});
+
+  final ConversationTurn turn;
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: AegisColors.primary.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.dashboard_customize_outlined, size: 14),
-            SizedBox(width: 6),
-            Text(
-              'Action card was shown',
-              style: TextStyle(
-                fontSize: 12,
-                color: AegisColors.onSurface,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: () => _showArchivedSurface(context, turn),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: AegisColors.primary.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Icon(Icons.dashboard_customize_outlined, size: 14),
+              SizedBox(width: 6),
+              Text(
+                'Action card · tap to view',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AegisColors.onSurface,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showArchivedSurface(
+    BuildContext context,
+    ConversationTurn turn,
+  ) async {
+    final cubit = context.read<AssistantCubit>();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => _ArchivedSurfaceSheet(
+        catalog: cubit.catalog,
+        messages: turn.surfaceMessages,
+        userText: turn.user,
+      ),
+    );
+  }
+}
+
+/// Modal that mounts a private [genui.SurfaceController], replays the
+/// captured A2UI messages from a past turn, and renders the resulting
+/// surface inside a [genui.Surface] widget. The controller is owned by
+/// the modal — disposed when the sheet closes — so the live home
+/// surface controller stays untouched.
+class _ArchivedSurfaceSheet extends StatefulWidget {
+  const _ArchivedSurfaceSheet({
+    required this.catalog,
+    required this.messages,
+    required this.userText,
+  });
+
+  final genui.Catalog catalog;
+  final List<genui.A2uiMessage> messages;
+  final String userText;
+
+  @override
+  State<_ArchivedSurfaceSheet> createState() => _ArchivedSurfaceSheetState();
+}
+
+class _ArchivedSurfaceSheetState extends State<_ArchivedSurfaceSheet> {
+  late final genui.SurfaceController _controller;
+  String? _surfaceId;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = genui.SurfaceController(catalogs: [widget.catalog]);
+    for (final message in widget.messages) {
+      _controller.handleMessage(message);
+      // Capture the first createSurface's id so the Surface widget
+      // can subscribe to the right ValueListenable. We can't reuse the
+      // live surfaceId because that's bound to the active controller.
+      if (_surfaceId == null && message is genui.CreateSurface) {
+        _surfaceId = message.surfaceId;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    final maxHeight = MediaQuery.of(context).size.height * 0.85;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxHeight),
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 0, 16, viewInsets.bottom + 16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'You: "${widget.userText}"',
+                  style: TextStyle(
+                    color: AegisColors.onSurfaceMuted,
+                    fontSize: 13,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+              if (_surfaceId == null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32),
+                  child: Center(
+                    child: Text(
+                      '(no surface to replay)',
+                      style: TextStyle(color: AegisColors.onSurfaceMuted),
+                    ),
+                  ),
+                )
+              else
+                genui.Surface(
+                  surfaceContext: _controller.contextFor(_surfaceId!),
+                ),
+            ],
+          ),
         ),
       ),
     );

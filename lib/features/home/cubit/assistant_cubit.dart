@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genui/genui.dart' as genui;
+import 'package:image/image.dart' as img;
 
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
@@ -13,6 +14,8 @@ import '../../../core/voice/model_pack.dart';
 import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/triage_input.dart';
 import '../../../core/voice/tts_service.dart';
+import '../../reports/data/report.dart';
+import '../../reports/data/reports_repository.dart';
 import '../widgets/aegis_catalog.dart';
 
 part 'assistant_cubit.freezed.dart';
@@ -26,32 +29,40 @@ class ConversationTurn {
   const ConversationTurn({
     required this.user,
     required this.assistant,
-    this.hadSurface = false,
+    this.surfaceMessages = const <genui.A2uiMessage>[],
   });
 
   final String user;
   final String assistant;
 
-  /// True when the agent emitted an A2UI surface for this turn (eg. a
-  /// triage / capture-evidence prompt). Past turns don't keep a frozen
-  /// snapshot of the surface — the home view shows a marker chip
-  /// instead. The live surface always reflects the most recent turn.
-  final bool hadSurface;
+  /// Frozen snapshot of the A2UI messages the agent emitted on this
+  /// turn — replayed into a private SurfaceController when the user
+  /// taps "Action card was shown" to inspect the original UI. Empty
+  /// when the turn was a plain text reply.
+  final List<genui.A2uiMessage> surfaceMessages;
 
+  bool get hadSurface => surfaceMessages.isNotEmpty;
+
+  /// We deliberately exclude [surfaceMessages] from equality —
+  /// genui's [genui.A2uiMessage] is not value-equatable, and the user
+  /// + assistant text already disambiguates two distinct turns. Using
+  /// the message list in `==` would trigger ListEquals work on every
+  /// rebuild for no observable benefit.
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is ConversationTurn &&
           other.user == user &&
           other.assistant == assistant &&
-          other.hadSurface == hadSurface;
+          other.surfaceMessages.length == surfaceMessages.length;
 
   @override
-  int get hashCode => Object.hash(user, assistant, hadSurface);
+  int get hashCode =>
+      Object.hash(user, assistant, surfaceMessages.length);
 
   @override
-  String toString() =>
-      'ConversationTurn(user: $user, assistant: $assistant, hadSurface: $hadSurface)';
+  String toString() => 'ConversationTurn(user: $user, '
+      'assistant: $assistant, messages: ${surfaceMessages.length})';
 }
 
 /// Stage of the assistant pipeline. The UI reacts to each one: the mic
@@ -121,14 +132,18 @@ class AssistantCubit extends Cubit<AssistantState> {
     required SttService stt,
     required LlmService llm,
     required TtsService tts,
+    required ReportsRepository reports,
     required String countryCode,
     String? languageCode,
+    Duration autoConfirmTimeout = const Duration(seconds: 30),
   })  : _recorder = recorder,
         _stt = stt,
         _llm = llm,
         _tts = tts,
+        _reports = reports,
         _countryCode = countryCode,
         _languageCode = languageCode,
+        _autoConfirmTimeout = autoConfirmTimeout,
         _catalog = buildAegisCatalog(),
         super(const AssistantState()) {
     _surfaceController = genui.SurfaceController(catalogs: [_catalog]);
@@ -138,6 +153,12 @@ class AssistantCubit extends Cubit<AssistantState> {
   }
 
   static const String surfaceId = 'aegis-home';
+
+  /// Catalog handed to the host page so it can mount the same set of
+  /// CatalogItems on a snapshot SurfaceController for past-turn replay.
+  /// We expose this so chat history can re-render an old surface
+  /// without rebuilding the catalog from scratch.
+  genui.Catalog get catalog => _catalog;
 
   /// Cap on prior turns we replay into the per-turn `incidentLog`.
   /// Each turn ≈ 100-300 tokens of summarised history; 4 entries
@@ -151,9 +172,27 @@ class AssistantCubit extends Cubit<AssistantState> {
   final SttService _stt;
   final LlmService _llm;
   final TtsService _tts;
+  final ReportsRepository _reports;
   final String _countryCode;
   final String? _languageCode;
+  final Duration _autoConfirmTimeout;
   final genui.Catalog _catalog;
+
+  /// Pending intake-card state. Survives across surface re-renders so
+  /// the user can attach text + photo + audio in any order before
+  /// pressing "Analyse with Aegis". The bytes are kept in memory only
+  /// for the duration of the intake — discarded once the analysis
+  /// turn fires (or the user navigates away).
+  String _pendingIntakeText = '';
+  bool _pendingHasPhoto = false;
+  bool _pendingHasAudio = false;
+  Uint8List? _pendingImageJpeg;
+  // Raw LLM output for the most recent generating turn — captured in
+  // [_respondTo] and consumed by [confirmSurface] when persisting the
+  // confirmed surface to [ReportsRepository]. Reset on every new turn.
+  String _lastRawLlmOutput = '';
+  String _lastUserText = '';
+  String _lastAssistantText = '';
 
   late final genui.SurfaceController _surfaceController;
   late final StreamSubscription<genui.ChatMessage> _actionSub;
@@ -161,8 +200,9 @@ class AssistantCubit extends Cubit<AssistantState> {
   StreamSubscription<SttUpdate>? _sttSub;
   StreamSubscription<String>? _llmSub;
   StreamSubscription<dynamic>? _surfaceUpdatesSub;
+  StreamSubscription<genui.GenerationEvent>? _parserSub;
   Timer? _autoConfirmTimer;
-  genui.A2uiTransportAdapter? _transport;
+  StreamController<String>? _parserInput;
   bool _voiceReady = false;
   bool _conversationActive = false;
 
@@ -248,8 +288,10 @@ class AssistantCubit extends Cubit<AssistantState> {
     _llmSub = null;
     await _surfaceUpdatesSub?.cancel();
     _surfaceUpdatesSub = null;
-    _transport?.dispose();
-    _transport = null;
+    await _parserSub?.cancel();
+    _parserSub = null;
+    await _parserInput?.close();
+    _parserInput = null;
     try {
       await _recorder.cancel();
     } on Object {
@@ -278,13 +320,96 @@ class AssistantCubit extends Cubit<AssistantState> {
     _conversationActive = false;
   }
 
-  /// Confirms the currently displayed surface — fired either by the
-  /// auto-confirm timer (Ask-style turns) or by the agent-emitted
-  /// `ConfirmActionBar`. Clears the surface and re-opens the mic if
-  /// the conversation is still active.
+  /// Explicit triage entry point — fired by the "Start triage" button
+  /// in the home header. Renders an intake card directly into the
+  /// surface controller (no LLM round-trip required, the card is
+  /// deterministic). The user fills it in and the card's Submit
+  /// action triggers [_onIntakeSubmit] which then runs analysis.
+  void startTriage() {
+    _pendingIntakeText = '';
+    _pendingHasPhoto = false;
+    _pendingHasAudio = false;
+    _lastRawLlmOutput = '';
+    _lastUserText = '';
+    _lastAssistantText = '';
+    _autoConfirmTimer?.cancel();
+    _renderIntakeCard();
+    emit(state.copyWith(
+      stage: AssistantStage.awaitingConfirmation,
+      surfaceReady: true,
+      transcript: '',
+      response: '',
+      thinkingTrace: 'Awaiting evidence — attach a photo, voice note, or '
+          'text description, then tap Analyse.',
+      errorMessage: null,
+    ));
+  }
+
+  /// Push a fresh intake card onto the surface controller. We reuse
+  /// this from [startTriage], from intake-button taps that mutate the
+  /// card's state, and from the rejection flow if the user wants to
+  /// go back to the intake step.
+  void _renderIntakeCard() {
+    _surfaceController
+      ..handleMessage(genui.A2uiMessage.fromJson(<String, Object?>{
+        'version': 'v0.9',
+        'createSurface': <String, Object?>{
+          'surfaceId': surfaceId,
+          'catalogId': _catalog.catalogId,
+          'sendDataModel': true,
+        },
+      }))
+      ..handleMessage(genui.A2uiMessage.fromJson(<String, Object?>{
+        'version': 'v0.9',
+        'updateComponents': <String, Object?>{
+          'surfaceId': surfaceId,
+          'components': <Map<String, Object?>>[
+            <String, Object?>{
+              'id': 'root',
+              'component': 'TriageIntakeCard',
+              'prompt':
+                  'Attach a photo, voice note, or describe the scene.',
+              'has_photo': _pendingHasPhoto,
+              'has_audio': _pendingHasAudio,
+              'text_value': _pendingIntakeText,
+            },
+          ],
+        },
+      }));
+  }
+
+  /// Confirms the currently displayed surface. If the surface came
+  /// from a real LLM-generated triage report (not the intake card),
+  /// persist it to [ReportsRepository] before clearing.
   Future<void> confirmSurface() async {
     if (state.stage != AssistantStage.awaitingConfirmation) return;
     _autoConfirmTimer?.cancel();
+
+    // Persist the report only when there's actual LLM output. The
+    // intake card sits in awaitingConfirmation too but it has no raw
+    // LLM trace — confirming it is a no-op (it's the act of starting
+    // triage, not the act of saving one).
+    if (_lastRawLlmOutput.isNotEmpty) {
+      final id = DateTime.now().toIso8601String();
+      final report = Report(
+        id: id,
+        userText: _lastUserText,
+        assistantText: _lastAssistantText,
+        createdAt: DateTime.now(),
+        rawLlmOutput: _lastRawLlmOutput,
+      );
+      try {
+        await _reports.save(report);
+        if (kDebugMode) {
+          debugPrint('[Aegis][Cubit] saved report id=$id');
+        }
+      } on Object catch (e) {
+        if (kDebugMode) {
+          debugPrint('[Aegis][Cubit] save report failed: $e');
+        }
+      }
+    }
+
     emit(state.copyWith(stage: AssistantStage.idle, surfaceReady: false));
     if (_conversationActive) {
       unawaited(_runListenLoop());
@@ -451,6 +576,7 @@ class AssistantCubit extends Cubit<AssistantState> {
   Future<void> _respondTo(
     String transcript, {
     List<String> extraIncidentLog = const <String>[],
+    Uint8List? intakeImage,
   }) async {
     emit(state.copyWith(
       stage: AssistantStage.thinking,
@@ -460,7 +586,10 @@ class AssistantCubit extends Cubit<AssistantState> {
     ));
     await _llmSub?.cancel();
     await _surfaceUpdatesSub?.cancel();
-    _transport?.dispose();
+    await _parserSub?.cancel();
+    _parserSub = null;
+    await _parserInput?.close();
+    _parserInput = null;
     _autoConfirmTimer?.cancel();
 
     // Build the incident log from prior turns so the one-shot triage
@@ -484,10 +613,30 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
     history.addAll(extraIncidentLog);
 
-    final transport = genui.A2uiTransportAdapter();
-    _transport = transport;
-    transport.incomingMessages.listen(_surfaceController.handleMessage);
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] _respondTo begin '
+        'transcriptLen=${transcript.length} '
+        'historyTurns=${replay.length} '
+        'historyEntries=${history.length} '
+        'extraLog=${extraIncidentLog.length}',
+      );
+    }
 
+    // We bypass genui's [A2uiTransportAdapter] entirely. Its
+    // `incomingText` getter does `.text.trim()` on every TextEvent,
+    // which strips the leading/trailing space LiteRT-LM puts on each
+    // streamed token — collapsing "Yes, I can hear you." into
+    // "Yes,Icanhearyou." (observed). Since we own the LLM stream
+    // ourselves, we feed it straight into [A2uiParserTransformer]
+    // and consume the parsed events without trim. JSON envelopes
+    // become A2uiMessageEvents (routed to the surface controller);
+    // everything else stays a TextEvent and goes to TTS + UI as-is.
+    final parserInput = StreamController<String>();
+    _parserInput = parserInput;
+    final capturedMessages = <genui.A2uiMessage>[];
+    var textChunkCount = 0;
+    var textCharCount = 0;
     final responseBuffer = StringBuffer();
     final pending = StringBuffer();
     var spokeAtLeastOne = false;
@@ -509,37 +658,76 @@ class AssistantCubit extends Cubit<AssistantState> {
       unawaited(_tts.enqueue(speakable));
     }
 
-    transport.incomingText.listen(
-      (chunk) {
+    _parserSub = parserInput.stream
+        .transform(const genui.A2uiParserTransformer())
+        .listen((event) {
+      if (event is genui.A2uiMessageEvent) {
+        capturedMessages.add(event.message);
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][Cubit] genui message #${capturedMessages.length} '
+            'type=${event.message.runtimeType}',
+          );
+        }
+        _surfaceController.handleMessage(event.message);
+        return;
+      }
+      if (event is genui.TextEvent) {
         if (!_conversationActive && state.stage != AssistantStage.thinking) {
           return;
+        }
+        // NB: NO trim here — we want to preserve every space so the
+        // streamed reply reads as natural language for both the chat
+        // bubble and the TTS engine.
+        final chunk = event.text;
+        if (chunk.isEmpty) return;
+        if (kDebugMode) {
+          textChunkCount++;
+          textCharCount += chunk.length;
         }
         responseBuffer.write(chunk);
         pending.write(chunk);
         emit(state.copyWith(response: responseBuffer.toString()));
         flushSentences();
-      },
-    );
+      }
+    });
 
-    _surfaceUpdatesSub = _surfaceController.surfaceUpdates.listen((_) {
+    _surfaceUpdatesSub = _surfaceController.surfaceUpdates.listen((evt) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] surfaceUpdate ${evt.runtimeType}',
+        );
+      }
       if (state.surfaceReady) return;
       sawSurface = true;
       emit(state.copyWith(surfaceReady: true));
     });
+
+    // Capture the raw token stream as it flows past — needed to
+    // persist the report at confirm-time. We tee into a string
+    // buffer and then forward the chunk to the parser. Reset on
+    // every turn so the buffer reflects only this generation.
+    final rawBuffer = StringBuffer();
 
     final completer = Completer<void>();
     _llmSub = _llm
         .triageStream(TriageInput(
           userText: transcript,
           incidentLog: history,
+          imageJpeg: intakeImage,
         ))
         .listen(
-      transport.addChunk,
+      (chunk) {
+        rawBuffer.write(chunk);
+        parserInput.add(chunk);
+      },
       onDone: () async {
         try {
-          await transport.flush();
+          await parserInput.close();
+          // Wait for the parser to drain whatever it had buffered.
+          await _parserSub?.asFuture<void>();
         } on Object {
-          // best-effort
+          // best-effort — the parser may already be closed
         }
         if (!completer.isCompleted) completer.complete();
       },
@@ -552,15 +740,40 @@ class AssistantCubit extends Cubit<AssistantState> {
     try {
       await completer.future;
       flushSentences(force: true);
+
+      // Empty surface guard: a `createSurface` envelope by itself is
+      // worthless — there's no root component to render. The model
+      // sometimes stops short after the first envelope (token budget
+      // or just confusion). Treat that as a plain-reply turn so the
+      // user doesn't see an empty card.
+      final usableSurface = sawSurface && _hasRenderableSurface();
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] _respondTo stream done '
+          'sawSurface=$sawSurface '
+          'usableSurface=$usableSurface '
+          'a2uiMessages=${capturedMessages.length} '
+          'textChunks=$textChunkCount textChars=$textCharCount '
+          'spokeAtLeastOne=$spokeAtLeastOne',
+        );
+      }
       if (spokeAtLeastOne) {
         await _tts.whenIdle;
       }
 
       final assistantText = responseBuffer.toString().trim();
+      // Stash raw output + texts for [confirmSurface] to persist.
+      // Cleared on the next [_respondTo] turn so we don't accidentally
+      // re-save the previous one.
+      _lastRawLlmOutput = usableSurface ? rawBuffer.toString() : '';
+      _lastUserText = transcript.trim();
+      _lastAssistantText = assistantText;
       final committed = ConversationTurn(
         user: transcript.trim(),
         assistant: assistantText,
-        hadSurface: sawSurface,
+        surfaceMessages: usableSurface
+            ? List.unmodifiable(capturedMessages)
+            : const <genui.A2uiMessage>[],
       );
       emit(state.copyWith(
         turns: List.unmodifiable(<ConversationTurn>[
@@ -572,21 +785,38 @@ class AssistantCubit extends Cubit<AssistantState> {
         thinkingTrace: assistantText,
       ));
 
-      // If the agent emitted a surface, pause for verification. The
-      // ConfirmActionBar inside the surface (or the auto-timer if the
-      // model didn't include one) drives the next transition.
-      if (sawSurface) {
+      // If the agent emitted a usable surface, pause for verification.
+      // ConfirmActionBar inside the surface OR the auto-timer drives
+      // the next transition.
+      if (usableSurface) {
+        final hasConfirmBar = _surfaceHasConfirmBar();
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][Cubit] surface verification '
+            'hasConfirmBar=$hasConfirmBar '
+            'autoConfirmIn=${hasConfirmBar ? "manual" : "${_autoConfirmTimeout.inSeconds}s"}',
+          );
+        }
         emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
-        if (!_surfaceHasConfirmBar()) {
-          // Lightweight reply with a surface but no explicit confirm —
-          // treat as Ask-style and auto-advance after a quiet window.
+        if (!hasConfirmBar) {
           _autoConfirmTimer = Timer(
-            const Duration(seconds: 3),
+            _autoConfirmTimeout,
             confirmSurface,
+          );
+        }
+      } else {
+        if (kDebugMode) {
+          debugPrint(
+            sawSurface
+                ? '[Aegis][Cubit] surface dropped — createSurface only, no components'
+                : '[Aegis][Cubit] turn committed (no surface, plain reply)',
           );
         }
       }
     } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] _respondTo failed: $e');
+      }
       if (_conversationActive) {
         emit(state.copyWith(
           stage: AssistantStage.error,
@@ -606,17 +836,201 @@ class AssistantCubit extends Cubit<AssistantState> {
   /// `{ "version": "v0.9", "action": { "name": "confirm", ... } }`.
   void _onSurfaceSubmit(genui.ChatMessage message) {
     final actionName = _firstActionName(message);
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] surface action received name=${actionName ?? "null"}',
+      );
+    }
     if (actionName == null) return;
     switch (actionName) {
       case 'confirm':
         confirmSurface();
       case 'reject':
         rejectSurface();
+      case 'intake_text':
+        _intakeTextRequested.add(null);
+      case 'intake_photo':
+        // The view owns the system picker (it needs a BuildContext).
+        // We just ask — bytes flow back via [setIntakePhoto].
+        _intakePhotoRequested.add(null);
+      case 'intake_audio':
+        unawaited(_captureIntakeAudio());
+      case 'intake_submit':
+        unawaited(_onIntakeSubmit());
       default:
         if (kDebugMode) {
-          debugPrint('[AssistantCubit] ignoring surface action "$actionName"');
+          debugPrint(
+            '[Aegis][Cubit] ignoring unknown surface action "$actionName"',
+          );
         }
     }
+  }
+
+  /// Fires when the user taps the "Text" pill on the intake card. The
+  /// view subscribes via [intakeTextRequests] and opens a text-entry
+  /// modal; the result flows back through [setIntakeText].
+  Stream<void> get intakeTextRequests => _intakeTextRequested.stream;
+  final StreamController<void> _intakeTextRequested =
+      StreamController<void>.broadcast();
+
+  /// Fires when the user taps the "Photo" pill on the intake card. The
+  /// view owns the system picker (needs a [BuildContext]) — it opens
+  /// `image_picker`, shrinks the result, and pushes the JPEG bytes
+  /// back via [setIntakePhoto].
+  Stream<void> get intakePhotoRequests => _intakePhotoRequested.stream;
+  final StreamController<void> _intakePhotoRequested =
+      StreamController<void>.broadcast();
+
+  /// Fires when an intake action surfaces user-facing feedback (eg.
+  /// recording started / failed). The view shows the broadcast
+  /// message in a snackbar.
+  Stream<String> get intakeStubRequests => _intakeStubRequested.stream;
+  final StreamController<String> _intakeStubRequested =
+      StreamController<String>.broadcast();
+
+  /// Update the pending intake text and re-render the card so the
+  /// pill flips to its "attached" state.
+  void setIntakeText(String text) {
+    _pendingIntakeText = text.trim();
+    if (state.surfaceReady) {
+      _renderIntakeCard();
+    }
+  }
+
+  /// Accept a JPEG (or any image bytes the platform handed us),
+  /// downscale to 512px on the longest edge, and store. Re-renders the
+  /// intake card so the Photo pill flips to attached.
+  ///
+  /// We resize off the UI thread via [compute] when the input is
+  /// large — the `image` package is pure Dart but [img.copyResize] on
+  /// a 12MP frame can take 200-400ms, which is enough to drop frames.
+  Future<void> setIntakePhoto(Uint8List rawBytes) async {
+    if (rawBytes.isEmpty) return;
+    Uint8List shrunk;
+    try {
+      shrunk = await compute(_shrinkJpeg, rawBytes);
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] image shrink failed: $e');
+      }
+      _intakeStubRequested.add(
+        'Could not process that photo. Try another one.',
+      );
+      return;
+    }
+    _pendingImageJpeg = shrunk;
+    _pendingHasPhoto = true;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] intake photo attached '
+        'rawBytes=${rawBytes.length} shrunkBytes=${shrunk.length}',
+      );
+    }
+    if (state.surfaceReady) {
+      _renderIntakeCard();
+    }
+  }
+
+  /// Voice intake — reuses the existing mic+VAD+STT pipeline so the
+  /// user gets the same listening UX as the conversation loop. The
+  /// transcript is appended to the intake text and the Voice pill
+  /// flips to attached. We don't keep raw WAV around: the 1024-token
+  /// model bundle can't reliably grade audio independently of text,
+  /// so transcription is the load-bearing signal.
+  Future<void> _captureIntakeAudio() async {
+    if (!_voiceReady) {
+      _intakeStubRequested.add('Voice models are not ready yet.');
+      return;
+    }
+    // Temporarily flip _conversationActive so [_captureUtterance]'s
+    // listening state-emit survives the mic→STT round trip. Restore
+    // afterwards so the listen loop doesn't keep firing.
+    final wasActive = _conversationActive;
+    _conversationActive = true;
+    String? captured;
+    try {
+      captured = await _captureUtterance();
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] intake voice capture failed: $e');
+      }
+      captured = null;
+    } finally {
+      _conversationActive = wasActive;
+    }
+
+    if (captured == null || captured.trim().isEmpty) {
+      _intakeStubRequested.add('Did not catch any speech. Try again.');
+      // Repaint the intake card so the user sees the listening UX
+      // tear down cleanly.
+      emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
+      _renderIntakeCard();
+      return;
+    }
+    final clean = captured.trim();
+    final existing = _pendingIntakeText.trim();
+    _pendingIntakeText = existing.isEmpty ? clean : '$existing $clean';
+    _pendingHasAudio = true;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] intake voice attached chars=${clean.length}',
+      );
+    }
+    emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
+    _renderIntakeCard();
+  }
+
+  Future<void> _onIntakeSubmit() async {
+    final text = _pendingIntakeText.trim();
+    final hasImage = _pendingImageJpeg != null;
+    // Need at least one signal — empty text + no image isn't
+    // analysable. Audio-only is captured as text via STT, so it
+    // shows up in the text field.
+    if (text.isEmpty && !hasImage) {
+      _intakeStubRequested.add(
+        'Add a description, photo, or voice note before analysing.',
+      );
+      return;
+    }
+    // Drop surfaceReady so the view flips from intake card → "Aegis is
+    // reasoning…" spinner. The LLM's createSurface envelope will
+    // overwrite the surface registry entry by id, and surfaceReady
+    // flips back to true once it lands.
+    emit(state.copyWith(surfaceReady: false));
+    _conversationActive = true;
+    await _respondTo(
+      text.isEmpty ? '(see attached evidence)' : text,
+      intakeImage: _pendingImageJpeg,
+    );
+    _conversationActive = false;
+    // Drop the captured bytes — they're already in the LLM context.
+    _pendingImageJpeg = null;
+    _pendingHasPhoto = false;
+    _pendingHasAudio = false;
+    _pendingIntakeText = '';
+  }
+
+  /// Pure-Dart JPEG re-encoder used by [compute]. Decodes any image
+  /// format `image` understands, scales the longest edge to 512px,
+  /// re-encodes as JPEG quality 80. Top-level so isolate spawn can
+  /// reach it.
+  static Uint8List _shrinkJpeg(Uint8List raw) {
+    final decoded = img.decodeImage(raw);
+    if (decoded == null) {
+      throw const FormatException('Unsupported image format');
+    }
+    final longest = decoded.width > decoded.height
+        ? decoded.width
+        : decoded.height;
+    final scaled = longest > 512
+        ? img.copyResize(
+            decoded,
+            width: decoded.width >= decoded.height ? 512 : null,
+            height: decoded.height > decoded.width ? 512 : null,
+          )
+        : decoded;
+    final bytes = img.encodeJpg(scaled, quality: 80);
+    return Uint8List.fromList(bytes);
   }
 
   static String? _firstActionName(genui.ChatMessage message) {
@@ -635,6 +1049,23 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
     }
     return null;
+  }
+
+  /// True when the live surface has at least a root component — ie.
+  /// the agent emitted both `createSurface` AND `updateComponents`
+  /// (rather than just the empty envelope). genui's `Surface` widget
+  /// silently renders nothing when the root is missing, so we use
+  /// this to decide whether to surface a verification UI at all.
+  bool _hasRenderableSurface() {
+    try {
+      final ctx = _surfaceController.contextFor(surfaceId);
+      final def = ctx.definition.value;
+      if (def == null) return false;
+      return def.components.isNotEmpty &&
+          def.components.containsKey('root');
+    } on Object {
+      return false;
+    }
   }
 
   /// Walk the live surface tree looking for any ConfirmActionBar
@@ -691,8 +1122,12 @@ class AssistantCubit extends Cubit<AssistantState> {
     await _sttSub?.cancel();
     await _llmSub?.cancel();
     await _surfaceUpdatesSub?.cancel();
+    await _parserSub?.cancel();
+    await _parserInput?.close();
     await _actionSub.cancel();
-    _transport?.dispose();
+    await _intakeTextRequested.close();
+    await _intakePhotoRequested.close();
+    await _intakeStubRequested.close();
     _surfaceController.dispose();
     await _recorder.dispose();
     return super.close();

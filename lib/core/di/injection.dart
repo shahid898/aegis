@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 
 import '../alert/alert_bridge.dart';
@@ -84,5 +85,10 @@ Future<void> configureDependencies() async {
   final llm = sl<LlmService>();
   llm.setRouterPack(ModelCatalog.routerPack);
   llm.useRouter();
-  unawaited(llm.warmUp());
+  unawaited(
+    llm.warmUp().then((_) async {
+      if (!kDebugMode) return;
+      await llm.runFunctionGemmaMobileActionProbe();
+    }),
+  );
 }

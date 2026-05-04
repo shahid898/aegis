@@ -166,6 +166,7 @@ class LlmService {
   bool _installed = false;
   Future<void>? _loadFuture;
   String? _preferredLanguage;
+  Future<void> _oneShotChain = Future<void>.value();
 
   /// The backend we'll try next time we (re)load the model. We start on GPU
   /// because real Adreno/Mali phones can run the WebGPU executor + OpenCL
@@ -300,6 +301,77 @@ class LlmService {
     double temperature = 0.2,
     int topK = 40,
     double topP = 0.95,
+  }) {
+    final completer = Completer<String>();
+    _oneShotChain = _oneShotChain
+        .catchError((Object error, StackTrace stackTrace) {
+          // Keep the chain alive after failures; otherwise one failed call
+          // can permanently block every later oneShot() waiter.
+        })
+        .then((_) async {
+      try {
+        final output = await _oneShotWithFallback(
+          systemInstruction: systemInstruction,
+          userPrompt: userPrompt,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          topK: topK,
+          topP: topP,
+        );
+        completer.complete(output);
+      } on Object catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
+  /// One-shot router call using flutter_gemma's chat API with tool metadata.
+  /// This keeps tool declarations in the model-facing conversation state
+  /// instead of relying only on prompt text instructions.
+  Future<ModelResponse> oneShotWithTools({
+    required String userPrompt,
+    required List<Tool> tools,
+    String? systemInstruction,
+    ToolChoice toolChoice = ToolChoice.required,
+    int maxTokens = 1024,
+    double temperature = 0.2,
+    int topK = 40,
+    double topP = 0.95,
+  }) {
+    final completer = Completer<ModelResponse>();
+    _oneShotChain = _oneShotChain
+        .catchError((Object error, StackTrace stackTrace) {
+          // Keep the chain alive after failures; otherwise one failed call
+          // can permanently block every later oneShot() waiter.
+        })
+        .then((_) async {
+          try {
+            final output = await _oneShotWithToolsWithFallback(
+              userPrompt: userPrompt,
+              tools: tools,
+              systemInstruction: systemInstruction,
+              toolChoice: toolChoice,
+              maxTokens: maxTokens,
+              temperature: temperature,
+              topK: topK,
+              topP: topP,
+            );
+            completer.complete(output);
+          } on Object catch (e, st) {
+            completer.completeError(e, st);
+          }
+        });
+    return completer.future;
+  }
+
+  Future<String> _oneShotWithFallback({
+    required String systemInstruction,
+    required String userPrompt,
+    required int maxTokens,
+    required double temperature,
+    required int topK,
+    required double topP,
   }) async {
     try {
       return await _oneShotOnce(
@@ -315,6 +387,42 @@ class LlmService {
       return _oneShotOnce(
         systemInstruction: systemInstruction,
         userPrompt: userPrompt,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topK: topK,
+        topP: topP,
+      );
+    }
+  }
+
+  Future<ModelResponse> _oneShotWithToolsWithFallback({
+    required String userPrompt,
+    required List<Tool> tools,
+    required String? systemInstruction,
+    required ToolChoice toolChoice,
+    required int maxTokens,
+    required double temperature,
+    required int topK,
+    required double topP,
+  }) async {
+    try {
+      return await _oneShotWithToolsOnce(
+        userPrompt: userPrompt,
+        tools: tools,
+        systemInstruction: systemInstruction,
+        toolChoice: toolChoice,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topK: topK,
+        topP: topP,
+      );
+    } on Object catch (e) {
+      if (!await _shouldFallbackToCpu(e)) rethrow;
+      return _oneShotWithToolsOnce(
+        userPrompt: userPrompt,
+        tools: tools,
+        systemInstruction: systemInstruction,
+        toolChoice: toolChoice,
         maxTokens: maxTokens,
         temperature: temperature,
         topK: topK,
@@ -348,6 +456,39 @@ class LlmService {
         await session.close();
       } on Object {
         // best-effort — the underlying Conversation may already be gone.
+      }
+    }
+  }
+
+  Future<ModelResponse> _oneShotWithToolsOnce({
+    required String userPrompt,
+    required List<Tool> tools,
+    required String? systemInstruction,
+    required ToolChoice toolChoice,
+    required int maxTokens,
+    required double temperature,
+    required int topK,
+    required double topP,
+  }) async {
+    final model = await _ensureModel(maxTokens: maxTokens);
+    final chat = await model.createChat(
+      temperature: temperature,
+      topK: topK,
+      topP: topP,
+      modelType: ModelType.functionGemma,
+      supportsFunctionCalls: true,
+      toolChoice: toolChoice,
+      tools: tools,
+      systemInstruction: systemInstruction,
+    );
+    try {
+      await chat.addQueryChunk(Message.text(text: userPrompt, isUser: true));
+      return await chat.generateChatResponse();
+    } finally {
+      try {
+        await chat.close();
+      } on Object {
+        // best-effort
       }
     }
   }
@@ -561,21 +702,17 @@ class LlmService {
     }
     final stopwatch = Stopwatch()..start();
     try {
-      // We deliberately do NOT use greedy (topK=1) here — that locks
-      // `max_top_k` on the engine and silently clamps every later
-      // session to greedy decoding. Use the router's sampling so the
-      // engine's ceilings get sized correctly. The throw-away "ok"
-      // prompt still produces only a few tokens before EOS, so the
-      // stochastic sampling cost is negligible and the output is
-      // discarded anyway.
-      await oneShot(
-        systemInstruction: '',
-        userPrompt: 'ok',
-        maxTokens: maxTokens,
+      // Warm-up should not spend tens of seconds decoding throw-away text,
+      // because that can starve real alert routing behind [_oneShotChain].
+      // We only prime engine/session creation here.
+      final model = await _ensureModel(maxTokens: maxTokens);
+      final session = await model.createSession(
         temperature: temperature,
         topK: topK,
         topP: topP,
+        systemInstruction: null,
       );
+      await session.close();
       if (kDebugMode) {
         debugPrint(
           '[LlmService] warm-up complete pack=${pack.id} '
@@ -586,6 +723,48 @@ class LlmService {
       if (kDebugMode) {
         debugPrint(
           '[LlmService] warm-up failed (non-fatal) pack=${pack.id}: $e\n$st',
+        );
+      }
+    }
+  }
+
+  /// Temporary diagnostic probe for FunctionGemma mobile-actions alignment.
+  /// Sends a canonical training-style intent and logs raw model output.
+  Future<void> runFunctionGemmaMobileActionProbe() async {
+    const prompt = '''
+Output ONLY function-call blocks, no prose, in native FunctionGemma format:
+<start_function_call>
+call:turn_on_flashlight{}
+<end_function_call>
+
+INBOUND MESSAGE
+source: probe
+sender: user
+
+BODY:
+"""
+turn on the flashlight
+"""
+''';
+    try {
+      final raw = await oneShot(
+        systemInstruction: '',
+        userPrompt: prompt,
+        maxTokens: 1024,
+        temperature: 0.2,
+        topK: 40,
+        topP: 0.9,
+      );
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] FunctionGemma mobile-actions probe raw (${raw.length} chars):\n'
+          '---START---\n$raw\n---END---',
+        );
+      }
+    } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] FunctionGemma mobile-actions probe failed: $e\n$st',
         );
       }
     }
@@ -760,8 +939,12 @@ class LlmService {
   Future<void> _install(VoiceModelPack pack) async {
     if (_installed) return;
     final path = await _registry.absolutePath(pack, pack.modelFile);
+    final modelType =
+        (_routerPack != null && pack.id == _routerPack!.id)
+            ? ModelType.functionGemma
+            : ModelType.gemmaIt;
     await FlutterGemma.installModel(
-      modelType: ModelType.gemmaIt,
+      modelType: modelType,
       fileType: ModelFileType.litertlm,
     ).fromFile(path).install();
     _installed = true;

@@ -65,7 +65,7 @@ dependencies:
   flutter_sound: ^9.30.0
 
   # On-device LLM runtime (Phase 3 assistant brain)
-  flutter_gemma: ^0.13.6
+  flutter_gemma: ^0.14.2
 
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2

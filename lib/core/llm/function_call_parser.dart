@@ -34,6 +34,11 @@ class FunctionCallParser {
     r'<start_function_call>(.*?)<end_function_call>',
     dotAll: true,
   );
+  static final RegExp _nativeHeader = RegExp(r'call:(\w+)\{', dotAll: true);
+  static final RegExp _nativeArg = RegExp(
+    r'(\w+):<escape>(.*?)<escape>',
+    dotAll: true,
+  );
 
   /// Pull every well-formed function call out of [text]. Returns an empty
   /// list when none are found — callers treat that as "model produced no
@@ -41,20 +46,37 @@ class FunctionCallParser {
   List<FunctionCall> parse(String text) {
     if (text.isEmpty) return const [];
     final matches = _blockPattern.allMatches(text);
-    if (matches.isEmpty) return const [];
 
     final allowed = allowList.isEmpty
         ? null
         : allowList.map((d) => d.action).toSet();
 
     final out = <FunctionCall>[];
-    for (final m in matches) {
-      final body = m.group(1);
-      if (body == null) continue;
-      final call = _decodeBlock(body);
-      if (call == null) continue;
-      if (allowed != null && !allowed.contains(call.action)) continue;
-      out.add(call);
+    if (matches.isNotEmpty) {
+      for (final m in matches) {
+        final body = m.group(1);
+        if (body == null) continue;
+        final call = _decodeBlock(body);
+        if (call == null) continue;
+        if (allowed != null && !allowed.contains(call.action)) continue;
+        out.add(call);
+      }
+      return List.unmodifiable(out);
+    }
+
+    // FunctionGemma often gets cut by stop tokens before `<end_function_call>`.
+    // Accept a single truncated block when at least `<start_function_call>`
+    // and a parseable `call:<name>{...` header are present.
+    final startIdx = text.indexOf('<start_function_call>');
+    if (startIdx >= 0) {
+      var body = text.substring(startIdx + '<start_function_call>'.length);
+      final endIdx = body.indexOf('<end_function_call>');
+      if (endIdx >= 0) body = body.substring(0, endIdx);
+      final call = _decodeBlock(body.trim());
+      if (call != null &&
+          (allowed == null || allowed.contains(call.action))) {
+        out.add(call);
+      }
     }
     return List.unmodifiable(out);
   }
@@ -62,6 +84,9 @@ class FunctionCallParser {
   FunctionCall? _decodeBlock(String raw) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) return null;
+
+    final native = _decodeNativeBlock(trimmed);
+    if (native != null) return native;
 
     final jsonText = _extractFirstJsonObject(trimmed);
     if (jsonText == null) return null;
@@ -91,6 +116,36 @@ class FunctionCallParser {
       arguments: arguments,
       rationale: rationale,
     );
+  }
+
+  FunctionCall? _decodeNativeBlock(String raw) {
+    final header = _nativeHeader.firstMatch(raw);
+    if (header == null) return null;
+    final name = header.group(1);
+    final action = FunctionRouteAction.fromWire(name);
+    if (action == null) return null;
+
+    final args = <String, dynamic>{};
+    for (final m in _nativeArg.allMatches(raw)) {
+      final key = m.group(1);
+      final value = m.group(2);
+      if (key == null || value == null) continue;
+      args[key] = value;
+    }
+
+    // Tolerate truncated `<escape>` values at end-of-generation.
+    if (args.isEmpty) {
+      final truncatedArg = RegExp(r'(\w+):<escape>([^<\n\r]+)', dotAll: true)
+          .firstMatch(raw);
+      if (truncatedArg != null) {
+        final key = truncatedArg.group(1);
+        final value = truncatedArg.group(2);
+        if (key != null && value != null) {
+          args[key] = value.trim();
+        }
+      }
+    }
+    return FunctionCall(action: action, arguments: args, rationale: null);
   }
 
   /// Some on-device runs ship `arguments` as a JSON-encoded string instead

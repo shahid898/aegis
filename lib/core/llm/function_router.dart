@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter_gemma/core/model_response.dart';
+import 'package:flutter_gemma/core/tool.dart';
 
 import '../alert/alert_event.dart';
 import '../sms_classifier/classification.dart';
@@ -81,93 +83,175 @@ class FunctionRouter {
       return const [];
     }
 
-    final systemInstruction = _buildSystemPrompt(preferredLanguage);
+    final routingTools = _routingDefinitions;
+    final systemInstruction = _buildSystemInstruction(preferredLanguage);
     final userPrompt = _buildUserPrompt(event, classification);
-
-    String raw;
-    try {
-      raw = await _llm.oneShot(
-        systemInstruction: systemInstruction,
-        userPrompt: userPrompt,
-        maxTokens: _maxTokens,
-        // Routing is a structured task — keep the sampler tight so we
-        // hit the function-call protocol consistently. Chat answers use
-        // the loose 1.0/64/0.95 set for a more conversational tone.
-        temperature: 0.2,
-        topK: 40,
-        topP: 0.9,
-      );
-    } on Object catch (e, st) {
+    final first = await _runWithTools(
+      userPrompt: userPrompt,
+      systemInstruction: systemInstruction,
+      definitions: routingTools,
+      toolChoice: ToolChoice.auto,
+    );
+    if (first.calls.isNotEmpty) {
       if (kDebugMode) {
-        debugPrint('[FunctionRouter] LLM call failed: $e\n$st');
+        debugPrint(
+          '[FunctionRouter] parsed ${first.calls.length} call(s) from '
+          '${first.sourceLength} chars',
+        );
       }
-      return const [];
+      return first.calls;
     }
 
-    final calls = _parser.parse(raw);
+    final repairPrompt = _buildRepairPrompt(
+      userPrompt: userPrompt,
+      previousResponse: first.rawText,
+    );
+    final second = await _runWithTools(
+      userPrompt: repairPrompt,
+      systemInstruction: systemInstruction,
+      definitions: routingTools,
+      toolChoice: ToolChoice.required,
+    );
     if (kDebugMode) {
       debugPrint(
-        '[FunctionRouter] parsed ${calls.length} call(s) from '
-        '${raw.length} chars',
+        '[FunctionRouter] parsed ${second.calls.length} call(s) from '
+        '${second.sourceLength} chars (repair pass)',
       );
     }
-    return calls;
+    return second.calls;
   }
 
-  String _buildSystemPrompt(String? language) {
+  Future<_RouteParseResult> _runWithTools({
+    required String userPrompt,
+    required String systemInstruction,
+    required List<FunctionDefinition> definitions,
+    required ToolChoice toolChoice,
+  }) async {
+    final response = await _llm.oneShotWithTools(
+      userPrompt: userPrompt,
+      tools: definitions
+          .map(
+            (d) => Tool(
+              name: d.action.wireName,
+              description: d.description,
+              parameters: d.parameters,
+            ),
+          )
+          .toList(growable: false),
+      systemInstruction: systemInstruction,
+      toolChoice: toolChoice,
+      maxTokens: _maxTokens,
+      // Routing is a structured task — keep the sampler tight so we
+      // hit the function-call protocol consistently. Chat answers use
+      // the loose 1.0/64/0.95 set for a more conversational tone.
+      temperature: 0.2,
+      topK: 40,
+      topP: 0.9,
+    );
+
+    return switch (response) {
+      FunctionCallResponse() => _fromFunctionCalls([response], definitions),
+      ParallelFunctionCallResponse() => _fromFunctionCalls(
+        response.calls,
+        definitions,
+      ),
+      TextResponse() => _parseTextResponse(response.token),
+      ThinkingResponse() => _parseTextResponse(response.content),
+    };
+  }
+
+  _RouteParseResult _parseTextResponse(String raw) {
+    if (kDebugMode) {
+      debugPrint(
+        '[FunctionRouter] raw LLM response (${raw.length} chars):\n'
+        '---START---\n$raw\n---END---',
+      );
+    }
+    return _RouteParseResult(calls: _parser.parse(raw), rawText: raw);
+  }
+
+  _RouteParseResult _fromFunctionCalls(
+    List<FunctionCallResponse> responses,
+    List<FunctionDefinition> definitions,
+  ) {
+    final out = <FunctionCall>[];
+    final allowed = definitions.map((d) => d.action).toSet();
+    for (final r in responses) {
+      final action = FunctionRouteAction.fromWire(r.name);
+      if (action == null || !allowed.contains(action)) continue;
+      out.add(
+        FunctionCall(
+          action: action,
+          arguments: Map<String, dynamic>.from(r.args),
+          rationale: null,
+        ),
+      );
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '[FunctionRouter] structured function response count=${out.length}',
+      );
+    }
+    return _RouteParseResult(
+      calls: List.unmodifiable(out),
+      rawText: responses
+          .map((r) => '${r.name}(${r.args.entries.map((e) => '${e.key}=${e.value}').join(',')})')
+          .join(';'),
+    );
+  }
+
+  List<FunctionDefinition> get _routingDefinitions {
+    const allowed = <FunctionRouteAction>{
+      FunctionRouteAction.dispatchLocalAlarm,
+      FunctionRouteAction.requestClarification,
+    };
+    return _definitions
+        .where((d) => allowed.contains(d.action))
+        .toList(growable: false);
+  }
+
+  String _buildRepairPrompt({
+    required String userPrompt,
+    required String previousResponse,
+  }) {
+    return '''
+$userPrompt
+
+Your previous answer was invalid for tool calling:
+"""
+$previousResponse
+"""
+
+Decide classification again from the message:
+- REAL life-safety emergency (imminent risk to life/safety) => MUST call dispatch_local_alarm.
+- NOT a real emergency (drill/test, promo/spam, OTP, social, "sale", opt-out text) => MUST call request_clarification.
+
+Return exactly ONE valid function call from this allowed set only:
+- dispatch_local_alarm
+- request_clarification
+
+No prose. No explanation. No markdown. No other function names.
+''';
+  }
+
+  String _buildSystemInstruction(String? language) {
     final languageRule = (language == null || language.isEmpty)
         ? 'reply in the alert\'s language'
         : 'reply in "$language"';
-    final tools = _definitions.map(_compactToolLine).join('\n');
-    // Terse on purpose: every line of prose costs prefill tokens, and
-    // FunctionGemma's KV cache is 1024 total. See class doc.
-    //
-    // No regex first-pass any more — *you* (the model) are the sole
-    // judge of whether the message is a real life-safety emergency.
+    // Keep this short: tool declarations are injected natively by
+    // flutter_gemma's chat path when `tools` are passed.
     return '''
-You route inbound text messages. You are the SOLE judge of whether the message is a real life-safety emergency.
+You route inbound text messages for emergency triage.
 
-Decide first:
 - REAL emergency = imminent threat to life or safety (disaster, evacuation, civil emergency, child abduction, hazmat, terror, mass-casualty event, etc.).
 - NOT a real emergency = marketing/spam, bills, OTPs, social messages, "EMERGENCY SALE", clickbait, anything that just uses urgent words.
-
-Output ONLY function-call blocks, no prose:
-<start_function_call>
-{"name":"<name>","arguments":{...},"rationale":"<short>"}
-<end_function_call>
 
 Rules:
 - If REAL emergency: emit dispatch_local_alarm FIRST (severity = your call: critical|high|medium|low), then any other useful actions.
 - If NOT a real emergency: emit request_clarification only, or no calls at all. Do NOT emit dispatch_local_alarm.
 - Most time-sensitive action first.
 - $languageRule.
-
-Catalog:
-$tools''';
-  }
-
-  /// One-line tool description: `name(arg1, arg2, [opt]) — what it does.`
-  /// Drops the JSON-schema wrapper (~3-4× cheaper in tokens than
-  /// `JsonEncoder.withIndent` on the same definition).
-  String _compactToolLine(FunctionDefinition def) {
-    final params = def.parameters['properties'] as Map<String, dynamic>? ?? {};
-    final required = (def.parameters['required'] as List?)?.cast<String>() ??
-        const <String>[];
-    final argFragments = <String>[];
-    for (final entry in params.entries) {
-      final name = entry.key;
-      final spec = entry.value as Map<String, dynamic>? ?? const {};
-      final type = spec['type'] as String? ?? 'string';
-      final enumValues = (spec['enum'] as List?)?.cast<String>();
-      final typeHint =
-          enumValues != null ? enumValues.join('|') : type;
-      final fragment = '$name:$typeHint';
-      argFragments.add(required.contains(name) ? fragment : '[$fragment]');
-    }
-    final args = argFragments.join(', ');
-    // Collapse the description to its first sentence to keep things tight.
-    final firstSentence = def.description.split('.').first.trim();
-    return '- ${def.action.wireName}($args) — $firstSentence.';
+Respond using tool calls only.''';
   }
 
   String _buildUserPrompt(
@@ -191,7 +275,15 @@ BODY:
 ${event.body}
 """
 
-Decide if this is a REAL life-safety emergency, then emit the function-call blocks.
+Decide whether this is a REAL life-safety emergency and call the best tool(s).
 ''';
   }
+}
+
+class _RouteParseResult {
+  const _RouteParseResult({required this.calls, required this.rawText});
+
+  final List<FunctionCall> calls;
+  final String rawText;
+  int get sourceLength => rawText.length;
 }

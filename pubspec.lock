@@ -314,10 +314,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_gemma
-      sha256: "72485d8a319bb4c0c00262b1c0e901eb0f0a6f61db5cae7ebfc80e3b5983567a"
+      sha256: "94b06fde143e71a050b66fb646c5317c00f6ad3ecefa66beafef5f70612e4b2b"
       url: "https://pub.dev"
     source: hosted
-    version: "0.13.6"
+    version: "0.14.2"
   flutter_lints:
     dependency: "direct dev"
     description:
@@ -509,30 +509,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "17.2.2"
-  google_cloud:
-    dependency: transitive
-    description:
-      name: google_cloud
-      sha256: fbcde933b2d8600c3cdb2328f8f4c47628ec29a39e9cef85dee535c7868993c4
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.4.1"
-  google_identity_services_web:
-    dependency: transitive
-    description:
-      name: google_identity_services_web
-      sha256: "5d187c46dc59e02646e10fe82665fc3884a9b71bc1c90c2b8b749316d33ee454"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.3.3+1"
-  googleapis_auth:
-    dependency: transitive
-    description:
-      name: googleapis_auth
-      sha256: "661738b763d3e524de69df53bf4e03943e4e01e98265cebcc6684871b06a5379"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.0"
   graphs:
     dependency: transitive
     description:
@@ -541,14 +517,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.3.2"
-  grpc:
-    dependency: transitive
-    description:
-      name: grpc
-      sha256: "86be3a7d39ad865b214a7370021ac80e68939238b507730de6d97fc662cb2723"
-      url: "https://pub.dev"
-    source: hosted
-    version: "5.1.0"
   gsettings:
     dependency: transitive
     description:
@@ -597,14 +565,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.6.0"
-  http2:
-    dependency: transitive
-    description:
-      name: http2
-      sha256: "382d3aefc5bd6dc68c6b892d7664f29b5beb3251611ae946a98d35158a82bbfa"
-      url: "https://pub.dev"
-    source: hosted
-    version: "2.3.1"
   http_multi_server:
     dependency: transitive
     description:
@@ -997,14 +957,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.0"
-  protobuf:
-    dependency: transitive
-    description:
-      name: protobuf
-      sha256: "75ec242d22e950bdcc79ee38dd520ce4ee0bc491d7fadc4ea47694604d22bf06"
-      url: "https://pub.dev"
-    source: hosted
-    version: "6.0.0"
   provider:
     dependency: transitive
     description:

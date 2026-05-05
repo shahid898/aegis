@@ -300,59 +300,22 @@ class ModelCatalog {
   );
 
   // ---------------------------------------------------------------------------
-  // Routing brain: FunctionGemma 270M, finetuned for mobile-action function
-  // calling. ~270 MB Q8 LiteRT-LM artifact published by the litert-community
-  // mirror on HuggingFace:
+  // Routing brain: NONE. We retired the FunctionGemma 270M router pack
+  // (`mobile_actions_q8_ekv1024.litertlm`) in favour of running the chat
+  // brain (Gemma 4 IT) in classifier mode via [LlmService.oneShot]. See
+  // [FunctionRouter] for the rationale: FunctionGemma is a general agentic
+  // tool-calling fine-tune that knows nothing about CAP/WEA disaster
+  // semantics and on-device escalated both real cyclone alerts and promo /
+  // drill SMS equally. Gemma 4 IT classifies disaster intent zero-shot.
   //
-  //   https://huggingface.co/litert-community/functiongemma-270m-ft-mobile-actions
-  //
-  // FunctionGemma's job in Aegis is to GATE the siren. The Kotlin
-  // SmsAlertReceiver cannot block on an LLM (foreground service must start
-  // within 5 s of the broadcast), so it spins up the service in the PENDING
-  // (silent heads-up) state on a permissive regex pre-filter and waits for
-  // FunctionGemma to either escalate (`dispatch_local_alarm`) or dismiss
-  // (`request_clarification` only). This is the model that decides whether
-  // the phone actually wakes the user — the regex is just a coarse pre-filter
-  // that keeps obviously-non-emergency SMS from ever reaching the LLM.
-  //
-  // Filename hint `q8_ekv1024` → 8-bit weights, 1024-token KV cache. The
-  // window is *tight* for a JSON-tools system prompt, so [FunctionRouter]
-  // keeps the prompt compact and caps `maxTokens` at ~256 for the reply.
+  // Removing the pack also removes a ~280 MB gated HuggingFace download
+  // from onboarding — one less HF_TOKEN gate the user can stumble on.
   // ---------------------------------------------------------------------------
-  static const String _functionGemmaUrl = String.fromEnvironment(
-    'AEGIS_FUNCTIONGEMMA_URL',
-    defaultValue:
-        'https://huggingface.co/litert-community/functiongemma-270m-ft-mobile-actions/resolve/main/mobile_actions_q8_ekv1024.litertlm',
-  );
 
-  static const VoiceModelPack _functionGemma270m = VoiceModelPack(
-    id: 'llm-functiongemma-270m-mobile-actions',
-    kind: ModelKind.llm,
-    displayName: 'FunctionGemma 270M router',
-    // Function-calling outputs are language-agnostic JSON envelopes; the
-    // model is multilingual so we reuse the chat brain's coverage list.
-    languageCodes: _gemmaLanguages,
-    archiveUrl: _functionGemmaUrl,
-    archiveSha256: '',
-    // Approximate; HuggingFace reports the Q8 LiteRT-LM artifact at
-    // ~270 MB. The actual download size is taken from Content-Length.
-    approxBytes: 280 * 1024 * 1024,
-    rootDirName: 'functiongemma-270m-mobile-actions',
-    modelFile: ModelFile(relativePath: 'model.litertlm'),
-    isArchive: false,
-    // litert-community/functiongemma-270m-ft-mobile-actions is gated on
-    // HuggingFace (Gemma licence). The download path will throw a clear
-    // MissingHfTokenException if HF_TOKEN was not baked in via dart-define.
-    requiresHfAuth: true,
-  );
-
-  /// Global LLM list — reused in every region plan. Order matters for the
-  /// onboarding download UI: ship the small router first so the alert
-  /// pipeline becomes useful immediately, then the larger chat brain.
-  static const List<VoiceModelPack> _llmAll = [
-    _functionGemma270m,
-    _gemma4E2bIt,
-  ];
+  /// Global LLM list — reused in every region plan. Single LLM: the chat
+  /// brain doubles as the alert-routing classifier so onboarding only
+  /// downloads one model.
+  static const List<VoiceModelPack> _llmAll = [_gemma4E2bIt];
 
   /// Global VAD list — reused in every region plan. Silero is tiny and
   /// language-agnostic so a single pack works everywhere.
@@ -361,12 +324,6 @@ class ModelCatalog {
   /// Public getter so UI code can describe the chat-LLM download ahead of
   /// time (size, display name) without depending on a specific region plan.
   static VoiceModelPack get llmPack => _gemma4E2bIt;
-
-  /// Public getter for the FunctionGemma routing brain — the pack the
-  /// AlertRouter loads to translate inbound emergency text into function
-  /// calls. Distinct from [llmPack] because the chat and router roles are
-  /// hot-swapped on the single flutter_gemma engine.
-  static VoiceModelPack get routerPack => _functionGemma270m;
 
   /// Public getter for the VAD pack used by every region plan.
   static VoiceModelPack get vadPack => _sileroVad;

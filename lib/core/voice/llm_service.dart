@@ -95,12 +95,11 @@ danger, or trying to help someone who is. Follow these rules on every turn:
 String _buildSystemPrompt(String? languageCode) {
   final code = languageCode?.toLowerCase();
   final name = code == null ? null : _languageNames[code];
-  final rule =
-      name == null
-          ? 'Reply in the same language the user spoke.'
-          : 'Always reply in $name. Do not switch to any other language even '
-              'if the user mixes English words. Use the native script for '
-              '$name (not romanized text).';
+  final rule = name == null
+      ? 'Reply in the same language the user spoke.'
+      : 'Always reply in $name. Do not switch to any other language even '
+            'if the user mixes English words. Use the native script for '
+            '$name (not romanized text).';
   return _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
 }
 
@@ -148,12 +147,12 @@ class LlmService {
 
   final ModelRegistry _registry;
 
-  // The two roles. flutter_gemma 0.13.6 only allows one model loaded at a
-  // time, so the chat brain (Gemma 4 IT, ~2.5 GB) and the routing brain
-  // (FunctionGemma 270M, ~270 MB) are registered separately and the active
-  // one is hot-swapped via [useChat] / [useRouter].
+  // Single LLM role. We retired the FunctionGemma 270M router pack — the
+  // chat brain (Gemma 4 IT) doubles as the alert-routing classifier via
+  // [oneShot] (history-free fresh session). flutter_gemma 0.13.6 only
+  // allows one model loaded at a time, which is now a non-issue since
+  // there is only ever one pack.
   VoiceModelPack? _chatPack;
-  VoiceModelPack? _routerPack;
 
   // The pack the engine is currently loaded against (or about to be — set
   // synchronously by [_activate], the heavy load happens lazily on the
@@ -176,13 +175,12 @@ class LlmService {
   PreferredBackend _preferredBackend = PreferredBackend.gpu;
 
   /// The pack the engine is currently loaded against (or about to be on
-  /// the next [ask]/[oneShot] call). Null until [setChatPack] /
-  /// [setRouterPack] / [setPack] has been called for either role.
+  /// the next [ask]/[oneShot] call). Null until [setChatPack] / [setPack]
+  /// has been called.
   VoiceModelPack? get pack => _activePack;
 
-  /// Convenience accessors for callers that need to query a specific role.
+  /// Convenience accessor.
   VoiceModelPack? get chatPack => _chatPack;
-  VoiceModelPack? get routerPack => _routerPack;
 
   bool get isReady => _model != null;
 
@@ -203,17 +201,6 @@ class LlmService {
     }
   }
 
-  /// Register the router-role pack (typically FunctionGemma 270M, a small
-  /// model finetuned for function calling). Does not load nor activate
-  /// the role — [useRouter] flips the active pack.
-  void setRouterPack(VoiceModelPack pack) {
-    if (pack.kind != ModelKind.llm) {
-      throw ArgumentError('LlmService.setRouterPack requires an LLM pack');
-    }
-    if (_routerPack?.id == pack.id) return;
-    _routerPack = pack;
-  }
-
   /// Backward-compatible alias used by the chat surface (assistant cubit):
   /// register [pack] as the chat brain AND activate it so the next
   /// [ask] / [askStream] call loads it.
@@ -227,12 +214,7 @@ class LlmService {
   /// [ask] / [askStream] / [oneShot] call.
   void useChat() => _activate(_chatPack);
 
-  /// Make the router-role pack the active engine. No-op if it's already
-  /// active. Used by [FunctionRouter] before [oneShot] so the LLM call
-  /// runs against FunctionGemma rather than the chat brain.
-  void useRouter() => _activate(_routerPack);
-
-  /// Synchronous role swap: replace [_activePack] and tear down anything
+  /// Synchronous engine swap: replace [_activePack] and tear down anything
   /// loaded against the old pack. Heavy work (download check + native
   /// load) is deferred to the next [_ensureModel] call.
   void _activate(VoiceModelPack? pack) {
@@ -250,10 +232,9 @@ class LlmService {
   /// down the cached chat so the new system prompt actually takes effect
   /// (the prompt is prefilled at chat creation time, not per turn).
   void setPreferredLanguage(String? languageCode) {
-    final normalized =
-        (languageCode == null || languageCode.isEmpty)
-            ? null
-            : languageCode.toLowerCase();
+    final normalized = (languageCode == null || languageCode.isEmpty)
+        ? null
+        : languageCode.toLowerCase();
     if (_preferredLanguage == normalized) return;
     _preferredLanguage = normalized;
     unawaited(_disposeChat());
@@ -309,49 +290,10 @@ class LlmService {
           // can permanently block every later oneShot() waiter.
         })
         .then((_) async {
-      try {
-        final output = await _oneShotWithFallback(
-          systemInstruction: systemInstruction,
-          userPrompt: userPrompt,
-          maxTokens: maxTokens,
-          temperature: temperature,
-          topK: topK,
-          topP: topP,
-        );
-        completer.complete(output);
-      } on Object catch (e, st) {
-        completer.completeError(e, st);
-      }
-    });
-    return completer.future;
-  }
-
-  /// One-shot router call using flutter_gemma's chat API with tool metadata.
-  /// This keeps tool declarations in the model-facing conversation state
-  /// instead of relying only on prompt text instructions.
-  Future<ModelResponse> oneShotWithTools({
-    required String userPrompt,
-    required List<Tool> tools,
-    String? systemInstruction,
-    ToolChoice toolChoice = ToolChoice.required,
-    int maxTokens = 1024,
-    double temperature = 0.2,
-    int topK = 40,
-    double topP = 0.95,
-  }) {
-    final completer = Completer<ModelResponse>();
-    _oneShotChain = _oneShotChain
-        .catchError((Object error, StackTrace stackTrace) {
-          // Keep the chain alive after failures; otherwise one failed call
-          // can permanently block every later oneShot() waiter.
-        })
-        .then((_) async {
           try {
-            final output = await _oneShotWithToolsWithFallback(
-              userPrompt: userPrompt,
-              tools: tools,
+            final output = await _oneShotWithFallback(
               systemInstruction: systemInstruction,
-              toolChoice: toolChoice,
+              userPrompt: userPrompt,
               maxTokens: maxTokens,
               temperature: temperature,
               topK: topK,
@@ -395,42 +337,6 @@ class LlmService {
     }
   }
 
-  Future<ModelResponse> _oneShotWithToolsWithFallback({
-    required String userPrompt,
-    required List<Tool> tools,
-    required String? systemInstruction,
-    required ToolChoice toolChoice,
-    required int maxTokens,
-    required double temperature,
-    required int topK,
-    required double topP,
-  }) async {
-    try {
-      return await _oneShotWithToolsOnce(
-        userPrompt: userPrompt,
-        tools: tools,
-        systemInstruction: systemInstruction,
-        toolChoice: toolChoice,
-        maxTokens: maxTokens,
-        temperature: temperature,
-        topK: topK,
-        topP: topP,
-      );
-    } on Object catch (e) {
-      if (!await _shouldFallbackToCpu(e)) rethrow;
-      return _oneShotWithToolsOnce(
-        userPrompt: userPrompt,
-        tools: tools,
-        systemInstruction: systemInstruction,
-        toolChoice: toolChoice,
-        maxTokens: maxTokens,
-        temperature: temperature,
-        topK: topK,
-        topP: topP,
-      );
-    }
-  }
-
   Future<String> _oneShotOnce({
     required String systemInstruction,
     required String userPrompt,
@@ -456,39 +362,6 @@ class LlmService {
         await session.close();
       } on Object {
         // best-effort — the underlying Conversation may already be gone.
-      }
-    }
-  }
-
-  Future<ModelResponse> _oneShotWithToolsOnce({
-    required String userPrompt,
-    required List<Tool> tools,
-    required String? systemInstruction,
-    required ToolChoice toolChoice,
-    required int maxTokens,
-    required double temperature,
-    required int topK,
-    required double topP,
-  }) async {
-    final model = await _ensureModel(maxTokens: maxTokens);
-    final chat = await model.createChat(
-      temperature: temperature,
-      topK: topK,
-      topP: topP,
-      modelType: ModelType.functionGemma,
-      supportsFunctionCalls: true,
-      toolChoice: toolChoice,
-      tools: tools,
-      systemInstruction: systemInstruction,
-    );
-    try {
-      await chat.addQueryChunk(Message.text(text: userPrompt, isUser: true));
-      return await chat.generateChatResponse();
-    } finally {
-      try {
-        await chat.close();
-      } on Object {
-        // best-effort
       }
     }
   }
@@ -582,8 +455,9 @@ class LlmService {
         .join(', ');
     final more = history.length > 6 ? ', …(+${history.length - 6})' : '';
     final chatId = identityHashCode(chat).toRadixString(16);
-    final incomingClipped =
-        incoming.length > 60 ? '${incoming.substring(0, 60)}…' : incoming;
+    final incomingClipped = incoming.length > 60
+        ? '${incoming.substring(0, 60)}…'
+        : incoming;
     debugPrint(
       '[LlmService] $label chat=#$chatId history=${history.length} '
       'incoming="$incomingClipped" history=[$preview$more]',
@@ -655,7 +529,7 @@ class LlmService {
   /// retry on the next alert, just on a cold engine.
   ///
   /// Caller is expected to have already pinned the desired role via
-  /// [useChat] / [useRouter]. No-op if the active pack is missing or not
+  /// [useChat]. No-op if the active pack is missing or not
   /// yet installed on disk.
   ///
   /// **Why every sampling parameter is exposed.** flutter_gemma's
@@ -728,48 +602,6 @@ class LlmService {
     }
   }
 
-  /// Temporary diagnostic probe for FunctionGemma mobile-actions alignment.
-  /// Sends a canonical training-style intent and logs raw model output.
-  Future<void> runFunctionGemmaMobileActionProbe() async {
-    const prompt = '''
-Output ONLY function-call blocks, no prose, in native FunctionGemma format:
-<start_function_call>
-call:turn_on_flashlight{}
-<end_function_call>
-
-INBOUND MESSAGE
-source: probe
-sender: user
-
-BODY:
-"""
-turn on the flashlight
-"""
-''';
-    try {
-      final raw = await oneShot(
-        systemInstruction: '',
-        userPrompt: prompt,
-        maxTokens: 1024,
-        temperature: 0.2,
-        topK: 40,
-        topP: 0.9,
-      );
-      if (kDebugMode) {
-        debugPrint(
-          '[LlmService] FunctionGemma mobile-actions probe raw (${raw.length} chars):\n'
-          '---START---\n$raw\n---END---',
-        );
-      }
-    } on Object catch (e, st) {
-      if (kDebugMode) {
-        debugPrint(
-          '[LlmService] FunctionGemma mobile-actions probe failed: $e\n$st',
-        );
-      }
-    }
-  }
-
   Future<void> _disposeChat() async {
     final chat = _chat;
     _chat = null;
@@ -817,8 +649,9 @@ turn on the flashlight
     // Longest suffix of [text] that is a prefix of [marker]. Used to hold
     // back trailing bytes that might complete a marker on the next token.
     int partialSuffix(String text, String marker) {
-      final maxLen =
-          text.length < marker.length - 1 ? text.length : marker.length - 1;
+      final maxLen = text.length < marker.length - 1
+          ? text.length
+          : marker.length - 1;
       for (var len = maxLen; len > 0; len--) {
         if (marker.startsWith(text.substring(text.length - len))) return len;
       }
@@ -892,8 +725,8 @@ turn on the flashlight
     final pack = _activePack;
     if (pack == null) {
       throw StateError(
-        'LlmService used before setChatPack/setRouterPack — call '
-        'useChat()/useRouter() (or the legacy setPack) first',
+        'LlmService used before setChatPack — call useChat() (or the '
+        'legacy setPack) first',
       );
     }
     if (!await _registry.isInstalled(pack)) {
@@ -939,12 +772,8 @@ turn on the flashlight
   Future<void> _install(VoiceModelPack pack) async {
     if (_installed) return;
     final path = await _registry.absolutePath(pack, pack.modelFile);
-    final modelType =
-        (_routerPack != null && pack.id == _routerPack!.id)
-            ? ModelType.functionGemma
-            : ModelType.gemmaIt;
     await FlutterGemma.installModel(
-      modelType: modelType,
+      modelType: ModelType.gemmaIt,
       fileType: ModelFileType.litertlm,
     ).fromFile(path).install();
     _installed = true;

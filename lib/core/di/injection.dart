@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import 'package:get_it/get_it.dart';
 
 import '../alert/alert_bridge.dart';
@@ -24,11 +23,13 @@ Future<void> configureDependencies() async {
   sl.registerSingleton<StorageService>(storage);
 
   sl.registerSingleton<Dio>(
-    Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 20),
-      receiveTimeout: const Duration(minutes: 10),
-      sendTimeout: const Duration(seconds: 30),
-    )),
+    Dio(
+      BaseOptions(
+        connectTimeout: const Duration(seconds: 20),
+        receiveTimeout: const Duration(minutes: 10),
+        sendTimeout: const Duration(seconds: 30),
+      ),
+    ),
   );
 
   sl.registerSingleton<CountryResolver>(const CountryResolver());
@@ -50,17 +51,16 @@ Future<void> configureDependencies() async {
   sl.registerSingleton<AlertBridge>(AlertBridge());
   sl.registerSingleton<SmsClassifier>(const SmsClassifier());
 
-  // Sprint 2 — FunctionGemma routing. The router lazily reuses the same
-  // LlmService that powers the chat loop (flutter_gemma is process-wide
-  // singleton) but flips into the router role + uses model.createSession()
-  // under the hood so router calls don't pollute the user-facing chat
-  // history. The router pack is the small (~270 MB) FunctionGemma 270M
-  // checkpoint, distinct from the chat brain (Gemma 4 IT, ~2.5 GB).
+  // Sprint 2 — Gemma 4 IT routing. We retired the FunctionGemma 270M router
+  // pack: it's a general agentic tool-calling fine-tune that knows nothing
+  // about disaster terminology and on-device escalated both real cyclone
+  // alerts and promo/test SMS. Gemma 4 IT (the chat brain) classifies
+  // disaster intent zero-shot via a strict VERDICT/SEVERITY/REASON envelope
+  // — see [FunctionRouter] for the protocol. Same engine as the chat loop;
+  // [LlmService.oneShot] runs in a fresh history-free session so routing
+  // never pollutes the user-facing conversation.
   sl.registerLazySingleton<FunctionRouter>(
-    () => FunctionRouter(
-      llm: sl<LlmService>(),
-      routerPack: ModelCatalog.routerPack,
-    ),
+    () => FunctionRouter(llm: sl<LlmService>(), chatPack: ModelCatalog.llmPack),
   );
 
   // The AlertRouter wires the bridge → classifier → function router →
@@ -74,21 +74,14 @@ Future<void> configureDependencies() async {
   )..start();
   sl.registerSingleton<AlertRouter>(alertRouter);
 
-  // Warm the FunctionGemma engine so the first real alert isn't paying
-  // for shader compile + KV-cache prefill (~25–40 s on cold GPU). We
-  // pin the router role (the alert pipeline's pack) and fire the warm-
-  // up off the main path — splash / onboarding renders immediately and
-  // the engine is hot by the time the user can simulate or receive an
-  // alert. If the router pack isn't installed yet (fresh install,
-  // download cubit still running) the call is a logged no-op and the
-  // first alert just pays the cold-start tax once.
+  // Warm the Gemma 4 IT engine so the first real alert (and the first
+  // chat turn) isn't paying for shader compile + KV-cache prefill on a
+  // cold GPU. Gemma 4 IT is now the routing brain too, so a single warm-
+  // up covers both paths. If the chat pack isn't installed yet (fresh
+  // install, download cubit still running) the call is a logged no-op
+  // and the first alert just pays the cold-start tax once.
   final llm = sl<LlmService>();
-  llm.setRouterPack(ModelCatalog.routerPack);
-  llm.useRouter();
-  unawaited(
-    llm.warmUp().then((_) async {
-      if (!kDebugMode) return;
-      await llm.runFunctionGemmaMobileActionProbe();
-    }),
-  );
+  llm.setChatPack(ModelCatalog.llmPack);
+  llm.useChat();
+  unawaited(llm.warmUp());
 }

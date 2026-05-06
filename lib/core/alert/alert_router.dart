@@ -8,6 +8,7 @@ import '../sms_classifier/classification.dart';
 import '../sms_classifier/sms_classifier.dart';
 import '../storage/storage_service.dart';
 import '../voice/tts_service.dart';
+import 'alert_briefing_sink.dart';
 import 'alert_bridge.dart';
 import 'alert_event.dart';
 import 'alert_handler.dart';
@@ -57,8 +58,9 @@ class AlertRouter {
     required FunctionRouter functionRouter,
     required TtsService tts,
     required StorageService storage,
+    required AlertBriefingSink briefingSink,
     Map<FunctionRouteAction, AlertHandler>? handlers,
-    String Function()? preferredLanguage,
+    String? Function()? preferredLanguage,
     // 90 s budget covers a fully-cold Gemma 4 IT decode: shader compile
     // (~10–15 s on first GPU dispatch) + KV-cache prefill of the verdict
     // prompt (~10–20 s for ~600 prompt tokens) + 20 s of decode for the
@@ -74,6 +76,7 @@ class AlertRouter {
        _functionRouter = functionRouter,
        _tts = tts,
        _storage = storage,
+       _briefingSink = briefingSink,
        _handlers = handlers ?? defaultAlertHandlers(),
        _preferredLanguage = preferredLanguage,
        _dartWatchdog = dartWatchdog;
@@ -83,8 +86,9 @@ class AlertRouter {
   final FunctionRouter _functionRouter;
   final TtsService _tts;
   final StorageService _storage;
+  final AlertBriefingSink _briefingSink;
   final Map<FunctionRouteAction, AlertHandler> _handlers;
-  final String Function()? _preferredLanguage;
+  final String? Function()? _preferredLanguage;
   final Duration _dartWatchdog;
 
   StreamSubscription<AlertEvent>? _subscription;
@@ -150,6 +154,8 @@ class AlertRouter {
       bridge: _bridge,
       tts: _tts,
       storage: _storage,
+      briefingSink: _briefingSink,
+      languageCode: _preferredLanguage?.call(),
     );
 
     // Drive the PENDING → CONFIRMED state machine *before* running the

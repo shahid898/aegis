@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import '../../../core/alert/alert_briefing_sink.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/model_catalog.dart';
@@ -36,6 +38,13 @@ class ConversationTurn {
 
   @override
   String toString() => 'ConversationTurn(user: $user, assistant: $assistant)';
+
+  /// Convenience for building a synthetic system/assistant-only turn.
+  /// `user` stays empty so the UI knows there is no user-side bubble
+  /// to render — the message arrived from a non-conversational source
+  /// (e.g. alert briefing pushed by [AlertBriefingSink]).
+  ConversationTurn copyWithAssistant(String text) =>
+      ConversationTurn(user: user, assistant: text);
 }
 
 /// Stage of the assistant pipeline. The UI reacts to each one: the mic
@@ -100,28 +109,150 @@ class AssistantCubit extends Cubit<AssistantState> {
     required LlmService llm,
     required TtsService tts,
     required String countryCode,
+    AlertBriefingSink? briefingSink,
     String? languageCode,
   }) : _recorder = recorder,
        _stt = stt,
        _llm = llm,
        _tts = tts,
        _countryCode = countryCode,
+       _briefingSink = briefingSink,
        _languageCode = languageCode,
        super(const AssistantState()) {
+    _attachLifecycleListener();
+    _subscribeBriefings();
     _bootstrap();
   }
+
+  /// Track foreground/background state so we can gate TTS playback on
+  /// the alert briefing — speaking while the native [FullScreenAlertActivity]
+  /// is on top would compete with the siren and play in the background
+  /// even after the takeover screen is dismissed. We only fire TTS when
+  /// the app is in [AppLifecycleState.resumed]; briefings that arrive
+  /// while paused/inactive (cold-launch path, or while the takeover
+  /// activity is covering MainActivity) are stashed in
+  /// [_deferredBriefingBody] and spoken on the next resume.
+  void _attachLifecycleListener() {
+    _lifecycleListener = AppLifecycleListener(
+      onStateChange: (state) {
+        _lifecycleState = state;
+      },
+      onResume: () {
+        _lifecycleState = AppLifecycleState.resumed;
+        final pending = _deferredBriefingBody;
+        if (pending == null) return;
+        _deferredBriefingBody = null;
+        unawaited(_speakBriefing(pending));
+      },
+    );
+  }
+
+  /// True only when the engine reports [AppLifecycleState.resumed]. The
+  /// `paused` / `inactive` / `hidden` / `detached` states all mean the
+  /// user is staring at something else (likely the takeover screen) and
+  /// audio playback would be either inappropriate or routed to the
+  /// background while the siren plays.
+  bool get _isAppForeground => _lifecycleState == AppLifecycleState.resumed;
 
   final AudioRecorderService _recorder;
   final SttService _stt;
   final LlmService _llm;
   final TtsService _tts;
   final String _countryCode;
+  final AlertBriefingSink? _briefingSink;
   final String? _languageCode;
 
   StreamSubscription<SttUpdate>? _sttSub;
   StreamSubscription<String>? _llmSub;
+  StreamSubscription<AlertBriefing>? _briefingSub;
+  AppLifecycleListener? _lifecycleListener;
+  // Default to `inactive` so the very first briefing handled before
+  // [AppLifecycleListener] fires `onResume` is deferred — important
+  // on the cold-launch path where the cubit is constructed during
+  // MainActivity onCreate, *before* the Flutter engine reports the
+  // first lifecycle event. Without this default the in-progress
+  // takeover activity would trigger TTS through the cubit.
+  AppLifecycleState _lifecycleState = AppLifecycleState.inactive;
   bool _voiceReady = false;
   bool _conversationActive = false;
+  String? _lastBriefingAlertId;
+  String? _deferredBriefingBody;
+
+  /// Subscribe to alert briefings so the in-app surface shows the same
+  /// summary text the takeover screen / TTS already deliver. Each
+  /// briefing arrives as a synthetic [ConversationTurn] in the chat
+  /// history — user-side bubble identifies the alert, assistant-side
+  /// bubble carries the model's translated briefing. Subscription is
+  /// idempotent on `alertId` so a duplicate broadcast doesn't double
+  /// the bubble. Runs even when the assistant is in [AssistantStage.degraded]
+  /// (no STT/LLM packs installed) — the briefing is the only
+  /// thing degraded users get to see.
+  void _subscribeBriefings() {
+    final sink = _briefingSink;
+    if (sink == null) return;
+    _briefingSub = sink.stream.listen(_onBriefing);
+    // Cold-launch path: the alert pipeline ran while the app was
+    // closed, the briefing was cached on the sink, the takeover
+    // screen auto-launched MainActivity, and now we're being mounted
+    // for the first time. Replay the cached briefing once so the
+    // home screen surfaces it (and the user finally hears it via
+    // TTS). [consumePending] makes this idempotent — the next cubit
+    // mount during the same session won't re-speak the same alert.
+    final pending = sink.pending;
+    if (pending != null) {
+      sink.consumePending();
+      _onBriefing(pending);
+    }
+  }
+
+  void _onBriefing(AlertBriefing briefing) {
+    if (_lastBriefingAlertId == briefing.alertId) return;
+    _lastBriefingAlertId = briefing.alertId;
+    final body = briefing.briefing.trim();
+    if (body.isEmpty) return;
+    // Empty `user` field — UI treats this as an assistant-only / system
+    // message and skips the right-aligned user bubble. The user did
+    // not type anything; the message arrived from the alert pipeline.
+    final synthetic = const ConversationTurn(
+      user: '',
+      assistant: '',
+    ).copyWithAssistant(body);
+    emit(
+      state.copyWith(
+        turns: List<ConversationTurn>.unmodifiable([...state.turns, synthetic]),
+        // Clear in-flight transcript/response so the briefing only
+        // renders as a single entry in the [turns] history. Setting
+        // `response` here too would double the bubble — the chat list
+        // builder appends a separate "in-flight" bubble whenever
+        // `response` is non-empty.
+        transcript: '',
+        response: '',
+      ),
+    );
+
+    // Gate TTS on foreground state. The native takeover activity
+    // (FullScreenAlertActivity) sits on top of MainActivity for ~4 s
+    // with the siren going; firing TTS now would compete with the
+    // siren AND continue playing in the background after the takeover
+    // dismisses. Defer to the next [AppLifecycleListener.onResume]
+    // which fires once MainActivity comes back to the foreground after
+    // the auto-launch.
+    if (_isAppForeground) {
+      unawaited(_speakBriefing(body));
+    } else {
+      _deferredBriefingBody = body;
+    }
+  }
+
+  Future<void> _speakBriefing(String body) async {
+    try {
+      await _tts.enqueue(body);
+    } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[AssistantCubit] briefing TTS failed: $e\n$st');
+      }
+    }
+  }
 
   Future<void> _bootstrap() async {
     emit(state.copyWith(stage: AssistantStage.preparing));
@@ -537,6 +668,9 @@ class AssistantCubit extends Cubit<AssistantState> {
     _conversationActive = false;
     await _sttSub?.cancel();
     await _llmSub?.cancel();
+    await _briefingSub?.cancel();
+    _lifecycleListener?.dispose();
+    _lifecycleListener = null;
     await _recorder.dispose();
     return super.close();
   }

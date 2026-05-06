@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/alert/alert_briefing_sink.dart';
 import '../../../core/alert/alert_bridge.dart';
 import '../../../core/alert/alert_event.dart';
 import '../../../core/di/injection.dart';
@@ -41,6 +42,7 @@ class HomePage extends StatelessWidget {
         tts: sl<TtsService>(),
         countryCode: countryCode,
         languageCode: languageCode,
+        briefingSink: sl<AlertBriefingSink>(),
       ),
       child: const _HomeView(),
     );
@@ -197,18 +199,26 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
         final isFirst = index == 0;
         if (index < state.turns.length) {
           final turn = state.turns[index];
+          // Synthetic / system turns (e.g. an alert briefing pushed by
+          // [AlertBriefingSink]) have an empty `user` field — the user
+          // didn't type anything, the message arrived from the alert
+          // pipeline. Render only the assistant-side bubble in that
+          // case so the chat doesn't show a bogus "You: …" header.
+          final isSystemTurn = turn.user.isEmpty;
           return Padding(
             padding: EdgeInsets.only(top: isFirst ? 0 : 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _Bubble(
-                  label: 'You',
-                  text: turn.user,
-                  align: CrossAxisAlignment.end,
-                  background: AegisColors.primary.withValues(alpha: 0.10),
-                ),
-                const SizedBox(height: 12),
+                if (!isSystemTurn) ...[
+                  _Bubble(
+                    label: 'You',
+                    text: turn.user,
+                    align: CrossAxisAlignment.end,
+                    background: AegisColors.primary.withValues(alpha: 0.10),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 _Bubble(
                   label: 'Aegis',
                   text: turn.assistant,
@@ -541,7 +551,7 @@ class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
             result == null
                 ? 'simulate() returned null — check the native logs.'
                 : 'Simulated alert ${result.id} delivered. '
-                    'Watch logcat for the FunctionGemma verdict.',
+                      'Watch logcat for the FunctionGemma verdict.',
           ),
         ),
       );
@@ -632,10 +642,7 @@ class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
                   value: AlertSeverity.medium,
                   child: Text('Medium'),
                 ),
-                DropdownMenuItem(
-                  value: AlertSeverity.low,
-                  child: Text('Low'),
-                ),
+                DropdownMenuItem(value: AlertSeverity.low, child: Text('Low')),
                 DropdownMenuItem(
                   value: AlertSeverity.unknown,
                   child: Text('Unknown'),

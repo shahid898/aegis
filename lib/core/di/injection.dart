@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:get_it/get_it.dart';
 
+import '../alert/alert_briefing_sink.dart';
 import '../alert/alert_bridge.dart';
 import '../alert/alert_router.dart';
 import '../geo/country_resolver.dart';
@@ -51,6 +52,12 @@ Future<void> configureDependencies() async {
   sl.registerSingleton<AlertBridge>(AlertBridge());
   sl.registerSingleton<SmsClassifier>(const SmsClassifier());
 
+  // Pub/sub seam between SummarizeForUserHandler (publisher) and the
+  // in-app assistant surface (subscriber). Held as a singleton so any
+  // surface — assistant cubit, takeover screen — can subscribe without
+  // touching the alert handler internals.
+  sl.registerSingleton<AlertBriefingSink>(AlertBriefingSink());
+
   // Sprint 2 — Gemma 4 IT routing. We retired the FunctionGemma 270M router
   // pack: it's a general agentic tool-calling fine-tune that knows nothing
   // about disaster terminology and on-device escalated both real cyclone
@@ -73,6 +80,13 @@ Future<void> configureDependencies() async {
     functionRouter: sl<FunctionRouter>(),
     tts: sl<TtsService>(),
     storage: sl<StorageService>(),
+    briefingSink: sl<AlertBriefingSink>(),
+    // Pull the user's onboarding-selected language fresh on every
+    // alert so language changes take effect without restarting the
+    // router. Returns null when onboarding hasn't completed — the
+    // FunctionRouter falls back to "alert's own language" in that
+    // case.
+    preferredLanguage: () => sl<StorageService>().selectedLanguageCode,
   )..start();
   sl.registerSingleton<AlertRouter>(alertRouter);
 

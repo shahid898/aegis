@@ -38,16 +38,14 @@
         android:lineSpacingMultiplier="1.2"
         android:layout_marginBottom="36dp"/>
 
-    <Button
-        android:id="@+id/alert_open_app"
+    <TextView
+        android:id="@+id/alert_auto_open_label"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/alert_open_app"
-        android:textSize="18sp"
-        android:textStyle="bold"
-        android:textColor="#B30000"
-        android:backgroundTint="#FFFFFF"
-        android:layout_marginBottom="12dp"/>
+        android:textColor="#FFE5E5"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginBottom="16dp"/>
 
     <Button
         android:id="@+id/alert_dismiss"

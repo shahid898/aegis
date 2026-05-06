@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../llm/function_call.dart';
 import '../storage/storage_service.dart';
 import '../voice/tts_service.dart';
+import 'alert_briefing_sink.dart';
 import 'alert_bridge.dart';
 import 'alert_event.dart';
 
@@ -17,6 +18,8 @@ class AlertContext {
     required this.bridge,
     required this.tts,
     required this.storage,
+    required this.briefingSink,
+    this.languageCode,
   });
 
   /// The alert that triggered the route.
@@ -33,6 +36,16 @@ class AlertContext {
   /// Persistent storage — [NotifyEmergencyContactsHandler] reads the
   /// user's saved contacts from here.
   final StorageService storage;
+
+  /// Broadcast pipe used by [SummarizeForUserHandler] to push the
+  /// briefing into the in-app assistant surface so the user can
+  /// read it (in addition to hearing it via TTS).
+  final AlertBriefingSink briefingSink;
+
+  /// The user's onboarding-selected language (ISO-639). Stamped onto
+  /// each [AlertBriefing] so the in-app surface knows what language
+  /// the briefing text is in.
+  final String? languageCode;
 }
 
 /// Single-method strategy. Implementations only run for the action they
@@ -65,17 +78,24 @@ class DispatchLocalAlarmHandler implements AlertHandler {
   }
 }
 
-/// Reads the model's briefing aloud over the takeover screen via TTS.
+/// Publishes the model's briefing into [AlertBriefingSink] for the
+/// in-app surface to render and read aloud.
 ///
-/// Two sources for the spoken text, in order of preference:
+/// Two sources for the briefing text, in order of preference:
 ///   1. `briefing` argument supplied by the router — Gemma 4 generated
 ///      a 2-3 sentence summary on the verdict pass.
 ///   2. The raw alert body (truncated). Last-resort fallback so the
-///      user always hears *something* when summarize_for_user fires.
+///      user always sees *something* when summarize_for_user fires.
 ///
-/// Speaking is fire-and-forget (`enqueue`) so the handler returns
-/// immediately and the next handler in the dispatch chain (e.g.
-/// notify_emergency_contacts) can run while audio plays.
+/// **TTS is intentionally not invoked here.** The handler runs while
+/// the user is still staring at the full-screen takeover with the
+/// siren going — speaking on top of the siren creates an audio mess.
+/// The assistant cubit reads the briefing from the sink (live stream
+/// or cached pending) the moment the home screen mounts and fires TTS
+/// at that point, so voice playback only happens once the takeover
+/// auto-dismisses and the in-app UI takes over. The takeover screen
+/// itself is silent; only the siren and vibration play during that
+/// window.
 class SummarizeForUserHandler implements AlertHandler {
   const SummarizeForUserHandler();
 
@@ -88,22 +108,28 @@ class SummarizeForUserHandler implements AlertHandler {
         : _fallbackFromBody(ctx.event.body);
     if (spoken.isEmpty) {
       if (kDebugMode) {
-        debugPrint('[AlertHandler] summarize_for_user: no text to speak');
+        debugPrint('[AlertHandler] summarize_for_user: no text to surface');
       }
       return;
     }
     if (kDebugMode) {
       debugPrint(
-        '[AlertHandler] summarize_for_user briefing="${_clip(spoken, 80)}"',
+        '[AlertHandler] summarize_for_user briefing="${_clip(spoken, 80)}" '
+        '(published to sink, TTS deferred to in-app surface)',
       );
     }
-    try {
-      await ctx.tts.enqueue(spoken);
-    } on Object catch (e, st) {
-      if (kDebugMode) {
-        debugPrint('[AlertHandler] TTS enqueue failed: $e\n$st');
-      }
-    }
+
+    final severity = (ctx.event.severity.name).isEmpty
+        ? 'high'
+        : ctx.event.severity.name;
+    ctx.briefingSink.publish(
+      AlertBriefing(
+        alertId: ctx.event.id,
+        severity: severity,
+        briefing: spoken,
+        languageCode: ctx.languageCode,
+      ),
+    );
   }
 
   String _fallbackFromBody(String body) {

@@ -244,6 +244,38 @@ class FunctionRouter {
     }
   }
 
+  /// ISO-639 → English name mapping for the languages Aegis ships TTS
+  /// voices for. Keep in sync with `_languageNames` in `llm_service.dart`
+  /// so the chat brain and the router prompt agree on which language
+  /// each code refers to.
+  String? _languageName(String code) => const {
+    'en': 'English',
+    'hi': 'Hindi',
+    'bn': 'Bengali',
+    'gu': 'Gujarati',
+    'pa': 'Punjabi',
+    'ta': 'Tamil',
+    'te': 'Telugu',
+    'kn': 'Kannada',
+    'ml': 'Malayalam',
+    'mr': 'Marathi',
+    'ur': 'Urdu',
+    'ar': 'Arabic',
+    'es': 'Spanish',
+    'pt': 'Portuguese',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'ru': 'Russian',
+    'tr': 'Turkish',
+    'zh': 'Chinese',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'id': 'Indonesian',
+    'vi': 'Vietnamese',
+    'th': 'Thai',
+  }[code];
+
   Iterable<String> _splitActionTokens(String line) sync* {
     for (final part in line.split(RegExp(r'[,\n;]+'))) {
       final t = part.trim().toLowerCase();
@@ -317,9 +349,15 @@ class FunctionRouter {
   }
 
   String _buildSystemInstruction(String? language) {
-    final languageRule = (language == null || language.isEmpty)
-        ? "REASON in the alert's language."
-        : 'REASON in "$language".';
+    final code = language?.toLowerCase().trim();
+    final name = (code == null || code.isEmpty) ? null : _languageName(code);
+    final languageRule = name == null
+        ? "REASON, BRIEFING, and CONTACT_MESSAGE in the alert's language."
+        : 'REASON, BRIEFING, and CONTACT_MESSAGE MUST be written in $name '
+              'using $name native script. Do not switch to English even if '
+              'the inbound message is in English. Translate proper nouns '
+              'phonetically when needed. Field labels (VERDICT, SEVERITY, '
+              'REASON, ACTIONS, BRIEFING, CONTACT_MESSAGE) stay in English.';
     return '''
 You are an emergency-alert classifier for a life-safety app. Decide whether the inbound message describes a REAL imminent threat to life or safety.
 

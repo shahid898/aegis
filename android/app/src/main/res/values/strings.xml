@@ -5,4 +5,6 @@
     <string name="alert_default_sender">Unknown source</string>
     <string name="alert_open_app">Open Aegis</string>
     <string name="alert_dismiss">Dismiss</string>
+    <string name="alert_auto_open_in">Opening Aegis in %1$ds…</string>
+    <string name="alert_auto_open_now">Opening Aegis…</string>
 </resources>

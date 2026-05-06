@@ -6,6 +6,8 @@ import '../llm/function_call.dart';
 import '../llm/function_router.dart';
 import '../sms_classifier/classification.dart';
 import '../sms_classifier/sms_classifier.dart';
+import '../storage/storage_service.dart';
+import '../voice/tts_service.dart';
 import 'alert_bridge.dart';
 import 'alert_event.dart';
 import 'alert_handler.dart';
@@ -53,18 +55,25 @@ class AlertRouter {
     required AlertBridge bridge,
     required SmsClassifier classifier,
     required FunctionRouter functionRouter,
+    required TtsService tts,
+    required StorageService storage,
     Map<FunctionRouteAction, AlertHandler>? handlers,
     String Function()? preferredLanguage,
-    // 30 s budget covers a cold-start FunctionGemma 270M decode (shader
-    // compile + KV-cache prefill is 25–40 s on real GPUs). The boot-time
-    // [LlmService.warmUp] should make this comfortably wide for warm
-    // calls (~1–3 s end-to-end). The native-side watchdog
-    // [LLM_VERDICT_TIMEOUT_MS] is set wider still so this Dart watchdog
-    // always fires first when both are armed.
-    Duration dartWatchdog = const Duration(seconds: 30),
+    // 90 s budget covers a fully-cold Gemma 4 IT decode: shader compile
+    // (~10–15 s on first GPU dispatch) + KV-cache prefill of the verdict
+    // prompt (~10–20 s for ~600 prompt tokens) + 20 s of decode for the
+    // VERDICT/SEVERITY/REASON/ACTIONS/BRIEFING/CONTACT_MESSAGE envelope.
+    // The boot-time [LlmService.warmUp] now does a 1-token decode to pay
+    // the shader-compile cost ahead of the first alert, so warm calls
+    // land at ~3–6 s. The native-side watchdog [LLM_VERDICT_TIMEOUT_MS]
+    // is set wider still so this Dart watchdog always fires first when
+    // both are armed.
+    Duration dartWatchdog = const Duration(seconds: 90),
   }) : _bridge = bridge,
        _classifier = classifier,
        _functionRouter = functionRouter,
+       _tts = tts,
+       _storage = storage,
        _handlers = handlers ?? defaultAlertHandlers(),
        _preferredLanguage = preferredLanguage,
        _dartWatchdog = dartWatchdog;
@@ -72,6 +81,8 @@ class AlertRouter {
   final AlertBridge _bridge;
   final SmsClassifier _classifier;
   final FunctionRouter _functionRouter;
+  final TtsService _tts;
+  final StorageService _storage;
   final Map<FunctionRouteAction, AlertHandler> _handlers;
   final String Function()? _preferredLanguage;
   final Duration _dartWatchdog;
@@ -134,7 +145,12 @@ class AlertRouter {
     }
 
     final calls = await _planCallsWithWatchdog(event, classification);
-    final ctx = AlertContext(event: event, bridge: _bridge);
+    final ctx = AlertContext(
+      event: event,
+      bridge: _bridge,
+      tts: _tts,
+      storage: _storage,
+    );
 
     // Drive the PENDING → CONFIRMED state machine *before* running the
     // side-effecting handlers so the user-facing siren transition kicks
@@ -191,10 +207,7 @@ class AlertRouter {
   /// Idempotent on the native side: the service ignores escalate /
   /// dismissPending intents whose id doesn't match the currently-pending
   /// alert.
-  Future<void> _applyVerdict(
-    AlertEvent event,
-    List<FunctionCall> calls,
-  ) async {
+  Future<void> _applyVerdict(AlertEvent event, List<FunctionCall> calls) async {
     final shouldEscalate = calls.any(
       (c) => c.action == FunctionRouteAction.dispatchLocalAlarm,
     );

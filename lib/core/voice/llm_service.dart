@@ -576,17 +576,41 @@ class LlmService {
     }
     final stopwatch = Stopwatch()..start();
     try {
-      // Warm-up should not spend tens of seconds decoding throw-away text,
-      // because that can starve real alert routing behind [_oneShotChain].
-      // We only prime engine/session creation here.
-      final model = await _ensureModel(maxTokens: maxTokens);
-      final session = await model.createSession(
-        temperature: temperature,
-        topK: topK,
-        topP: topP,
-        systemInstruction: null,
-      );
-      await session.close();
+      // We MUST decode at least one token here, not just create the
+      // session. Engine init + session create only loads weights — the
+      // first decode is what triggers OpenCL/WebGPU shader compilation
+      // (10–15 s on real Adreno/Mali) and the first KV-cache prefill on
+      // the GPU memory allocator. Without that, the first real alert
+      // routing call still pays the full cold-start tax (observed:
+      // 15 s prefill + 20 s decode = 35 s, exceeding the AlertRouter
+      // watchdog and dismissing real emergencies). Run the decode
+      // serialised through [_oneShotChain] so we don't race a real
+      // routing call.
+      _oneShotChain = _oneShotChain
+          .catchError((Object _, StackTrace _) {})
+          .then((_) async {
+            // CRITICAL: pass the SAME engine maxTokens the router uses
+            // (1024) so warm-up doesn't lock the cached engine at a
+            // small ceiling. [_ensureModel] keys cache by maxTokens —
+            // a tiny warm-up value (e.g. 8) would build an 8-token
+            // engine, then the next real alert (524-token prompt)
+            // throws "Input token ids are too long" because the
+            // engine was sized for 8.
+            final raw = await _oneShotWithFallback(
+              systemInstruction: '',
+              userPrompt: 'OK',
+              maxTokens: maxTokens,
+              temperature: temperature,
+              topK: topK,
+              topP: topP,
+            );
+            if (kDebugMode) {
+              debugPrint(
+                '[LlmService] warm-up decode produced ${raw.length} chars',
+              );
+            }
+          });
+      await _oneShotChain;
       if (kDebugMode) {
         debugPrint(
           '[LlmService] warm-up complete pack=${pack.id} '

@@ -71,6 +71,8 @@ Future<void> configureDependencies() async {
     bridge: sl<AlertBridge>(),
     classifier: sl<SmsClassifier>(),
     functionRouter: sl<FunctionRouter>(),
+    tts: sl<TtsService>(),
+    storage: sl<StorageService>(),
   )..start();
   sl.registerSingleton<AlertRouter>(alertRouter);
 

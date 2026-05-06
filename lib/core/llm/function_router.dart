@@ -154,22 +154,102 @@ class FunctionRouter {
     // cases where the model emitted a non-vocabulary verdict like
     // "URGENT" or omitted the line entirely.
     final severitySaysEmergency = severity == 'critical' || severity == 'high';
-    if (isPositive || (verdict.isEmpty && severitySaysEmergency)) {
-      return [
-        FunctionCall(
-          action: FunctionRouteAction.dispatchLocalAlarm,
-          arguments: {
-            'severity': severity,
-            'reason': _trimReason(reasonRaw ?? 'Emergency alert'),
-          },
-          rationale: null,
-        ),
-      ];
+    if (!isPositive && !(verdict.isEmpty && severitySaysEmergency)) {
+      // Ambiguous (verdict present but matched neither bucket, and
+      // severity is medium/low) → empty plan, AlertRouter will DISMISS.
+      return const [];
     }
 
-    // Ambiguous (verdict present but matched neither bucket, and
-    // severity is medium/low) → empty plan, AlertRouter will DISMISS.
-    return const [];
+    final reason = _trimReason(reasonRaw ?? 'Emergency alert');
+    final calls = <FunctionCall>[
+      FunctionCall(
+        action: FunctionRouteAction.dispatchLocalAlarm,
+        arguments: {'severity': severity, 'reason': reason},
+        rationale: null,
+      ),
+    ];
+
+    // Follow-up actions. Parsed from a comma- or newline-separated
+    // ACTIONS line. Always after dispatch_local_alarm so the siren
+    // transition fires first; handlers run sequentially in
+    // [AlertRouter._safeDispatch].
+    final actionLine = _extractField(raw, 'ACTIONS');
+    if (actionLine != null) {
+      for (final tok in _splitActionTokens(actionLine)) {
+        final action = FunctionRouteAction.fromWire(tok);
+        if (action == null) continue;
+        if (action == FunctionRouteAction.dispatchLocalAlarm) continue;
+        if (action == FunctionRouteAction.requestClarification) continue;
+        calls.add(_buildFollowupCall(action, raw, reason));
+      }
+    }
+
+    final briefing = _extractField(raw, 'BRIEFING');
+    if (briefing != null && briefing.length > 4) {
+      // Override / inject summarize_for_user when BRIEFING is present.
+      calls.removeWhere(
+        (c) => c.action == FunctionRouteAction.summarizeForUser,
+      );
+      calls.add(
+        FunctionCall(
+          action: FunctionRouteAction.summarizeForUser,
+          arguments: {'briefing': briefing.trim()},
+          rationale: null,
+        ),
+      );
+    }
+
+    return List.unmodifiable(calls);
+  }
+
+  FunctionCall _buildFollowupCall(
+    FunctionRouteAction action,
+    String raw,
+    String fallbackReason,
+  ) {
+    switch (action) {
+      case FunctionRouteAction.summarizeForUser:
+        final briefing = _extractField(raw, 'BRIEFING')?.trim();
+        return FunctionCall(
+          action: action,
+          arguments: {
+            if (briefing != null && briefing.isNotEmpty) 'briefing': briefing,
+          },
+          rationale: null,
+        );
+      case FunctionRouteAction.notifyEmergencyContacts:
+        final message = _extractField(raw, 'CONTACT_MESSAGE')?.trim();
+        return FunctionCall(
+          action: action,
+          arguments: {
+            'message': (message != null && message.isNotEmpty)
+                ? message
+                : fallbackReason,
+          },
+          rationale: null,
+        );
+      case FunctionRouteAction.activateMeshRelay:
+        return FunctionCall(
+          action: action,
+          arguments: const {'ttl_minutes': 30},
+          rationale: null,
+        );
+      case FunctionRouteAction.dispatchLocalAlarm:
+      case FunctionRouteAction.requestClarification:
+        return FunctionCall(
+          action: action,
+          arguments: const {},
+          rationale: null,
+        );
+    }
+  }
+
+  Iterable<String> _splitActionTokens(String line) sync* {
+    for (final part in line.split(RegExp(r'[,\n;]+'))) {
+      final t = part.trim().toLowerCase();
+      if (t.isEmpty) continue;
+      yield t;
+    }
   }
 
   /// Whole-word-ish token match — substring with non-letter boundaries
@@ -252,10 +332,19 @@ Reply with EXACTLY this format and nothing else — no prose, no markdown, no pr
 VERDICT: <EMERGENCY or NOT_EMERGENCY>
 SEVERITY: <critical, high, medium, or low>
 REASON: <short user-facing label, 5-10 words max>
+ACTIONS: <comma-separated follow-up actions, or NONE>
+BRIEFING: <2-3 short sentences read aloud to the user, or NONE>
+CONTACT_MESSAGE: <SMS body sent to emergency contacts, or NONE>
 
 VERDICT MUST be the literal word EMERGENCY or NOT_EMERGENCY (uppercase, with underscore). Do NOT use synonyms like REAL, YES, CONFIRMED, NO, SAFE, DRILL, TEST.
 
-If NOT_EMERGENCY, set SEVERITY: low.
+ACTIONS allowed values (pick zero or more, comma-separated):
+- summarize_for_user — user is staring at takeover screen, read BRIEFING aloud.
+- notify_emergency_contacts — fire CONTACT_MESSAGE to saved contacts.
+- activate_mesh_relay — re-broadcast over BLE mesh for off-grid neighbours.
+
+If NOT_EMERGENCY: SEVERITY: low, ACTIONS: NONE, BRIEFING: NONE, CONTACT_MESSAGE: NONE.
+If EMERGENCY: at minimum include summarize_for_user in ACTIONS and write a real BRIEFING; add notify_emergency_contacts when the user should alert their network; add activate_mesh_relay only for wide-area disasters (cyclone, earthquake, tsunami, wildfire) where neighbours nearby may be offline.
 $languageRule''';
   }
 

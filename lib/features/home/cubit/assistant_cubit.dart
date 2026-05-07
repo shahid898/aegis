@@ -6,6 +6,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
 import '../../../core/alert/alert_briefing_sink.dart';
+import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/model_catalog.dart';
@@ -69,6 +70,7 @@ abstract class AssistantState with _$AssistantState {
     @Default('') String response,
     @Default(<ConversationTurn>[]) List<ConversationTurn> turns,
     String? errorMessage,
+    String? languageCode,
   }) = _AssistantState;
 
   const AssistantState._();
@@ -109,6 +111,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     required LlmService llm,
     required TtsService tts,
     required String countryCode,
+    StorageService? storage,
     AlertBriefingSink? briefingSink,
     String? languageCode,
   }) : _recorder = recorder,
@@ -116,9 +119,10 @@ class AssistantCubit extends Cubit<AssistantState> {
        _llm = llm,
        _tts = tts,
        _countryCode = countryCode,
+       _storage = storage,
        _briefingSink = briefingSink,
        _languageCode = languageCode,
-       super(const AssistantState()) {
+       super(AssistantState(languageCode: languageCode)) {
     if (kDebugMode) {
       debugPrint(
         '[AssistantCubit] init country=$countryCode '
@@ -165,8 +169,14 @@ class AssistantCubit extends Cubit<AssistantState> {
   final LlmService _llm;
   final TtsService _tts;
   final String _countryCode;
+  final StorageService? _storage;
   final AlertBriefingSink? _briefingSink;
-  final String? _languageCode;
+  String? _languageCode;
+
+  /// Currently-selected ISO-639 language code (mutable — see
+  /// [changeLanguage]). Used by the home header to render the active
+  /// option in the language dropdown.
+  String? get currentLanguageCode => _languageCode;
 
   StreamSubscription<SttUpdate>? _sttSub;
   StreamSubscription<String>? _llmSub;
@@ -255,6 +265,37 @@ class AssistantCubit extends Cubit<AssistantState> {
     } else {
       _deferredBriefingBody = body;
     }
+  }
+
+  /// Switch the active reply / TTS / STT language. Persists the new
+  /// code to storage, re-pins Gemma's reply language, and re-runs the
+  /// pack-selection bootstrap so STT and TTS pick the right voice
+  /// packs for the new locale.
+  ///
+  /// Stops any in-flight conversation first — pivoting language
+  /// mid-utterance would mean the user starts speaking in language A
+  /// and the model replies in B with the wrong TTS voice.
+  Future<void> changeLanguage(String code) async {
+    final normalized = code.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+    if (_languageCode == normalized) return;
+    if (kDebugMode) {
+      debugPrint(
+        '[AssistantCubit] changeLanguage from=${_languageCode ?? "(none)"} '
+        'to=$normalized',
+      );
+    }
+    if (_conversationActive) {
+      await stopConversation();
+    }
+    _languageCode = normalized;
+    emit(state.copyWith(languageCode: normalized));
+    await _storage?.setSelectedLanguageCode(normalized);
+    _llm.setPreferredLanguage(normalized);
+    // Rebuild voice packs (TTS + STT) for the new language. Bootstrap
+    // already handles availability + degraded fallbacks; calling it
+    // again is the simplest path to a consistent post-switch state.
+    await _bootstrap();
   }
 
   Future<void> _speakBriefing(String body) async {

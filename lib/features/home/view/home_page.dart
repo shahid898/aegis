@@ -9,7 +9,9 @@ import '../../../app/theme.dart';
 import '../../../core/alert/alert_briefing_sink.dart';
 import '../../../core/alert/alert_bridge.dart';
 import '../../../core/alert/alert_event.dart';
+import '../../../core/constants/languages.dart';
 import '../../../core/di/injection.dart';
+import '../../../models/language_option.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
@@ -42,6 +44,7 @@ class HomePage extends StatelessWidget {
         tts: sl<TtsService>(),
         countryCode: countryCode,
         languageCode: languageCode,
+        storage: sl<StorageService>(),
         briefingSink: sl<AlertBriefingSink>(),
       ),
       child: const _HomeView(),
@@ -113,17 +116,139 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Aegis', style: Theme.of(context).textTheme.headlineMedium),
-        const SizedBox(height: 4),
-        const Text(
-          'Offline. Ready.',
-          style: TextStyle(color: AegisColors.onSurfaceMuted, fontSize: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Aegis', style: Theme.of(context).textTheme.headlineMedium),
+              const SizedBox(height: 4),
+              const Text(
+                'Offline. Ready.',
+                style: TextStyle(
+                  color: AegisColors.onSurfaceMuted,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
         ),
+        _LanguageDropdown(currentCode: state.languageCode),
       ],
     );
+  }
+}
+
+/// Compact language switcher anchored to the home header. Renders the
+/// currently-selected language at the top of the menu (it's also shown
+/// as the trigger label) and the rest of [SupportedLanguages.all]
+/// below in their canonical order.
+///
+/// Selecting a new language calls [AssistantCubit.changeLanguage], which
+/// persists the choice, re-pins Gemma's reply language, and re-bootstraps
+/// the voice packs so STT/TTS pick the matching voice.
+class _LanguageDropdown extends StatelessWidget {
+  const _LanguageDropdown({required this.currentCode});
+  final String? currentCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<AssistantCubit>();
+    final ordered = _orderedLanguages(currentCode);
+    final selected = currentCode == null
+        ? null
+        : SupportedLanguages.findByCode(currentCode!);
+    final triggerLabel = selected?.nativeName ?? 'Language';
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AegisColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: PopupMenuButton<String>(
+        tooltip: 'Change language',
+        offset: const Offset(0, 36),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        onSelected: (code) async {
+          if (code == currentCode) return;
+          await cubit.changeLanguage(code);
+        },
+        itemBuilder: (_) => [
+          for (final lang in ordered)
+            PopupMenuItem<String>(
+              value: lang.code,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          lang.nativeName,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          lang.englishName,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AegisColors.onSurfaceMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (lang.code == currentCode)
+                    const Icon(
+                      Icons.check,
+                      size: 18,
+                      color: AegisColors.primary,
+                    ),
+                ],
+              ),
+            ),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.language, size: 18, color: AegisColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                triggerLabel,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AegisColors.primary,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_drop_down,
+                size: 18,
+                color: AegisColors.primary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Selected language first, rest in canonical order with the
+  /// selected entry filtered out so it doesn't appear twice.
+  List<LanguageOption> _orderedLanguages(String? selectedCode) {
+    final all = SupportedLanguages.all;
+    if (selectedCode == null) return all;
+    final selected = all.where((l) => l.code == selectedCode).toList();
+    if (selected.isEmpty) return all;
+    final rest = all.where((l) => l.code != selectedCode).toList();
+    return [...selected, ...rest];
   }
 }
 

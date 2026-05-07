@@ -12,9 +12,9 @@ part of 'assistant_cubit.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
-mixin _$AssistantState {
+mixin _$AssistantState implements DiagnosticableTreeMixin {
 
- AssistantStage get stage; String get transcript; String get response; List<ConversationTurn> get turns; String? get errorMessage;
+ AssistantStage get stage; String get transcript; String get response; List<ConversationTurn> get turns; String? get errorMessage; String? get languageCode;
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -22,19 +22,25 @@ mixin _$AssistantState {
 $AssistantStateCopyWith<AssistantState> get copyWith => _$AssistantStateCopyWithImpl<AssistantState>(this as AssistantState, _$identity);
 
 
+@override
+void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+  properties
+    ..add(DiagnosticsProperty('type', 'AssistantState'))
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('languageCode', languageCode));
+}
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),errorMessage);
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),errorMessage,languageCode);
 
 @override
-String toString() {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, errorMessage: $errorMessage)';
+String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, errorMessage: $errorMessage, languageCode: $languageCode)';
 }
 
 
@@ -45,7 +51,7 @@ abstract mixin class $AssistantStateCopyWith<$Res>  {
   factory $AssistantStateCopyWith(AssistantState value, $Res Function(AssistantState) _then) = _$AssistantStateCopyWithImpl;
 @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, String? errorMessage
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, String? errorMessage, String? languageCode
 });
 
 
@@ -62,13 +68,14 @@ class _$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? errorMessage = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? errorMessage = freezed,Object? languageCode = freezed,}) {
   return _then(_self.copyWith(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
 as String,response: null == response ? _self.response : response // ignore: cast_nullable_to_non_nullable
 as String,turns: null == turns ? _self.turns : turns // ignore: cast_nullable_to_non_nullable
 as List<ConversationTurn>,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
+as String?,languageCode: freezed == languageCode ? _self.languageCode : languageCode // ignore: cast_nullable_to_non_nullable
 as String?,
   ));
 }
@@ -154,10 +161,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage,  String? languageCode)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage,_that.languageCode);case _:
   return orElse();
 
 }
@@ -175,10 +182,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.er
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage,  String? languageCode)  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState():
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage,_that.languageCode);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -195,10 +202,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.er
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  String? errorMessage,  String? languageCode)?  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.errorMessage,_that.languageCode);case _:
   return null;
 
 }
@@ -209,9 +216,9 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.er
 /// @nodoc
 
 
-class _AssistantState extends AssistantState {
-  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.errorMessage}): _turns = turns,super._();
-
+class _AssistantState extends AssistantState with DiagnosticableTreeMixin {
+  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.errorMessage, this.languageCode}): _turns = turns,super._();
+  
 
 @override@JsonKey() final  AssistantStage stage;
 @override@JsonKey() final  String transcript;
@@ -224,6 +231,7 @@ class _AssistantState extends AssistantState {
 }
 
 @override final  String? errorMessage;
+@override final  String? languageCode;
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
@@ -232,19 +240,25 @@ class _AssistantState extends AssistantState {
 _$AssistantStateCopyWith<_AssistantState> get copyWith => __$AssistantStateCopyWithImpl<_AssistantState>(this, _$identity);
 
 
+@override
+void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+  properties
+    ..add(DiagnosticsProperty('type', 'AssistantState'))
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('languageCode', languageCode));
+}
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),errorMessage);
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),errorMessage,languageCode);
 
 @override
-String toString() {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, errorMessage: $errorMessage)';
+String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, errorMessage: $errorMessage, languageCode: $languageCode)';
 }
 
 
@@ -255,7 +269,7 @@ abstract mixin class _$AssistantStateCopyWith<$Res> implements $AssistantStateCo
   factory _$AssistantStateCopyWith(_AssistantState value, $Res Function(_AssistantState) _then) = __$AssistantStateCopyWithImpl;
 @override @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, String? errorMessage
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, String? errorMessage, String? languageCode
 });
 
 
@@ -272,13 +286,14 @@ class __$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? errorMessage = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? errorMessage = freezed,Object? languageCode = freezed,}) {
   return _then(_AssistantState(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
 as String,response: null == response ? _self.response : response // ignore: cast_nullable_to_non_nullable
 as String,turns: null == turns ? _self._turns : turns // ignore: cast_nullable_to_non_nullable
 as List<ConversationTurn>,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
+as String?,languageCode: freezed == languageCode ? _self.languageCode : languageCode // ignore: cast_nullable_to_non_nullable
 as String?,
   ));
 }

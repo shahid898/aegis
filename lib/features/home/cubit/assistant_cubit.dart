@@ -119,6 +119,12 @@ class AssistantCubit extends Cubit<AssistantState> {
        _briefingSink = briefingSink,
        _languageCode = languageCode,
        super(const AssistantState()) {
+    if (kDebugMode) {
+      debugPrint(
+        '[AssistantCubit] init country=$countryCode '
+        'language=${languageCode ?? "(none — onboarding skipped)"}',
+      );
+    }
     _attachLifecycleListener();
     _subscribeBriefings();
     _bootstrap();
@@ -177,6 +183,7 @@ class AssistantCubit extends Cubit<AssistantState> {
   bool _conversationActive = false;
   String? _lastBriefingAlertId;
   String? _deferredBriefingBody;
+  String? _activeBriefingBody;
 
   /// Subscribe to alert briefings so the in-app surface shows the same
   /// summary text the takeover screen / TTS already deliver. Each
@@ -210,6 +217,12 @@ class AssistantCubit extends Cubit<AssistantState> {
     _lastBriefingAlertId = briefing.alertId;
     final body = briefing.briefing.trim();
     if (body.isEmpty) return;
+    // Stash so the next mic-driven conversation seeds the chat brain
+    // with the briefing as context — the user can ask follow-ups
+    // ("what should I do?", "where is the nearest shelter?") without
+    // re-explaining the disaster. Cleared in [stopConversation].
+    _activeBriefingBody = body;
+    _llm.setBriefingContext(body);
     // Empty `user` field — UI treats this as an assistant-only / system
     // message and skips the right-aligned user bubble. The user did
     // not type anything; the message arrived from the alert pipeline.
@@ -246,7 +259,17 @@ class AssistantCubit extends Cubit<AssistantState> {
 
   Future<void> _speakBriefing(String body) async {
     try {
-      await _tts.enqueue(body);
+      // 0.85× speed — emergency briefings need to land clearly. The
+      // chat-reply path uses default 1.0×; this is intentionally
+      // slower so a panicked user can parse "evacuate to higher
+      // ground" without backtracking.
+      if (kDebugMode) {
+        debugPrint(
+          '[AssistantCubit] briefing TTS speak '
+          'lang=${_languageCode ?? "auto"} speed=0.85 chars=${body.length}',
+        );
+      }
+      await _tts.enqueue(body, speed: 0.85);
     } on Object catch (e, st) {
       if (kDebugMode) {
         debugPrint('[AssistantCubit] briefing TTS failed: $e\n$st');
@@ -326,22 +349,32 @@ class AssistantCubit extends Cubit<AssistantState> {
     if (!_voiceReady) return;
     if (_conversationActive) return;
     _conversationActive = true;
-    // Reset transcript/response/turns so the user sees a clean slate.
-    // Clearing `turns` here matches the LLM-side reset below: a brand-new
-    // top-level conversation should have no visible history *and* no LLM
-    // memory of prior conversations.
+    // Preserve any briefing bubble already rendered in [turns] so the
+    // user can keep reading the alert summary while asking follow-ups.
+    // Only clear in-flight transcript / response — those belong to a
+    // single utterance, not the visible history.
+    final preserved = state.turns;
     emit(
       state.copyWith(
         transcript: '',
         response: '',
-        turns: const <ConversationTurn>[],
+        turns: preserved,
         errorMessage: null,
       ),
     );
-    // Drop any LLM history from a prior conversation. Within *this*
-    // conversation we keep the session warm across turns so the system
-    // prompt prefills only once — see [LlmService] docs.
+    // Reset Gemma's chat history so prior unrelated conversation turns
+    // don't leak into the new conversation. The briefing context is
+    // *not* lost — [setBriefingContext] keeps the addendum and the
+    // newly-rebuilt chat session prefills it as part of the system
+    // prompt. Within this conversation the session stays warm across
+    // turns so the system prompt prefills only once.
     unawaited(_llm.resetSession());
+    if (kDebugMode && _activeBriefingBody != null) {
+      debugPrint(
+        '[AssistantCubit] new conversation seeded with briefing context '
+        '(${_activeBriefingBody!.length} chars)',
+      );
+    }
     // Run the loop in the background. Errors emit to state; the loop
     // ends on its own when [_conversationActive] flips to false.
     unawaited(_runListenLoop());

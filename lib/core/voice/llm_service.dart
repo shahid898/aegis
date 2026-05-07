@@ -92,7 +92,7 @@ danger, or trying to help someone who is. Follow these rules on every turn:
 5. Keep responses under 120 words unless the user explicitly asks for more.
 ''';
 
-String _buildSystemPrompt(String? languageCode) {
+String _buildSystemPrompt(String? languageCode, {String? briefingContext}) {
   final code = languageCode?.toLowerCase();
   final name = code == null ? null : _languageNames[code];
   final rule = name == null
@@ -100,7 +100,14 @@ String _buildSystemPrompt(String? languageCode) {
       : 'Always reply in $name. Do not switch to any other language even '
             'if the user mixes English words. Use the native script for '
             '$name (not romanized text).';
-  return _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
+  final base = _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
+  if (briefingContext == null || briefingContext.trim().isEmpty) return base;
+  // Append the briefing so the model knows what just happened — the
+  // user can then ask follow-ups ("what should I do?", "where is the
+  // nearest shelter?") without re-explaining the situation. Kept as a
+  // short addendum to avoid bloating prefill cost.
+  return '$base\n\nRecent emergency context (do not repeat verbatim): '
+      '${briefingContext.trim()}';
 }
 
 /// Wraps flutter_gemma's modern API so the rest of the app can treat the
@@ -165,6 +172,7 @@ class LlmService {
   bool _installed = false;
   Future<void>? _loadFuture;
   String? _preferredLanguage;
+  String? _briefingContext;
   Future<void> _oneShotChain = Future<void>.value();
 
   /// The backend we'll try next time we (re)load the model. We start on GPU
@@ -237,6 +245,23 @@ class LlmService {
         : languageCode.toLowerCase();
     if (_preferredLanguage == normalized) return;
     _preferredLanguage = normalized;
+    unawaited(_disposeChat());
+  }
+
+  /// Pin a recent emergency-alert briefing into the chat brain's
+  /// system prompt as an addendum. The next chat session will be built
+  /// with the briefing appended after the base system prompt, so when
+  /// the user asks a follow-up ("what should I do?", "where is the
+  /// nearest shelter?") the model already has the disaster context
+  /// without the user re-explaining it. Pass `null` to clear.
+  ///
+  /// Tears down the cached chat so the new system prompt takes effect
+  /// — system prompt is prefilled at chat creation time.
+  void setBriefingContext(String? briefing) {
+    final normalized = briefing?.trim();
+    final next = (normalized == null || normalized.isEmpty) ? null : normalized;
+    if (_briefingContext == next) return;
+    _briefingContext = next;
     unawaited(_disposeChat());
   }
 
@@ -499,7 +524,10 @@ class LlmService {
       // false)` agrees with this tradeoff.
       isThinking: false,
       modelType: ModelType.gemmaIt,
-      systemInstruction: _buildSystemPrompt(_preferredLanguage),
+      systemInstruction: _buildSystemPrompt(
+        _preferredLanguage,
+        briefingContext: _briefingContext,
+      ),
     );
     _chat = chat;
     if (kDebugMode) {

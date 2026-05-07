@@ -80,6 +80,12 @@ class FunctionRouter {
 
     final systemInstruction = _buildSystemInstruction(preferredLanguage);
     final userPrompt = _buildUserPrompt(event);
+    if (kDebugMode) {
+      debugPrint(
+        '[FunctionRouter] route id=${event.id} '
+        'language=${preferredLanguage ?? "(none — alert language)"}',
+      );
+    }
 
     final raw = await _llm.oneShot(
       systemInstruction: systemInstruction,

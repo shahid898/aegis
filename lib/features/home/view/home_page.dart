@@ -62,7 +62,7 @@ class _HomeView extends StatelessWidget {
       // `AlertBridge.simulate(...)` so we can exercise FunctionGemma routing
       // and the PENDING/CONFIRMED state machine without a real telco. The FAB
       // is dropped in release builds via `kDebugMode`.
-      floatingActionButton: kDebugMode ? const _AlertSimulatorFab() : null,
+      floatingActionButton: const _AlertSimulatorFab(),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),

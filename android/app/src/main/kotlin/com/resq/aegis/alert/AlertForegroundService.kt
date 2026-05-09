@@ -292,28 +292,33 @@ class AlertForegroundService : Service() {
     /**
      * Last-resort decision when no Dart-side verdict arrived in time.
      *
-     * **Policy: always dismiss.** With the regex first-pass and the
-     * trusted-sender allow-list both retired, FunctionGemma is the
-     * sole arbiter of "is this a real emergency". If we never heard
-     * back from the Dart side it means either the model was still
-     * cold-loading past the (already generous) timeout, or the Flutter
-     * engine itself died — neither situation is a basis for waking
-     * the user with a siren. The silent PENDING heads-up has already
-     * surfaced the message; tearing it down is the safe default.
+     * **Policy: escalate on timeout.** The cached [FlutterEngine] in
+     * [AegisApplication] guarantees Dart is alive even on cold-start, so
+     * a missed verdict means either (a) Gemma cold-load exceeded the
+     * already-generous [LLM_VERDICT_TIMEOUT_MS] budget, or (b) the engine
+     * itself crashed mid-bootstrap. Both situations are recoverable: if
+     * an SMS arrived through the manifest receiver, the telco already
+     * vouched for it as a real message — a stuck verdict is no reason to
+     * silently drop a possible emergency. We escalate to the loud channel
+     * + full-screen-intent so the user is never left thinking the app
+     * silently swallowed an alert.
      *
-     * The previous policy used the regex severity carried on the event
-     * to decide, which combined with a too-permissive trusted-sender
-     * allow-list let a promo SMS from sender "PROMO" trip the siren.
+     * **Tradeoff.** This biases toward false positives (a promo SMS that
+     * outlasts the watchdog will siren). The previous "always dismiss"
+     * policy biased toward false negatives, which is a strictly worse
+     * failure mode for an emergency app. Once the Dart engine is reliably
+     * fast on cold-start (post-warmup), this watchdog should never fire
+     * in practice.
      */
     private fun onWatchdogFired() {
         val current = pending ?: return
         if (state == AlertConstants.STATE_CONFIRMED) return
         Log.w(
             TAG,
-            "Watchdog fired (id=${current.id}) sev=${current.severity} → DISMISS " +
+            "Watchdog fired (id=${current.id}) sev=${current.severity} → ESCALATE " +
                 "(no LLM verdict received within ${AlertConstants.LLM_VERDICT_TIMEOUT_MS}ms)"
         )
-        stopAlert()
+        escalateInternal(current)
     }
 
     private fun stopAlert() {

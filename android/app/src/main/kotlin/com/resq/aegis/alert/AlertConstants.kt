@@ -73,7 +73,7 @@ object AlertConstants {
      * tears itself down. We never go from silence to siren without an
      * explicit `dispatch_local_alarm` from the model.
      */
-    const val LLM_VERDICT_TIMEOUT_MS = 40_000L
+    const val LLM_VERDICT_TIMEOUT_MS = 60_000L
 
     /** MethodChannel name shared with `lib/core/alert/alert_bridge.dart`. */
     const val METHOD_CHANNEL = "com.resq.aegis/alert"

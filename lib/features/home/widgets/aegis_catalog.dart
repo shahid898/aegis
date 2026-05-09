@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:genui/genui.dart';
 import 'package:json_schema_builder/json_schema_builder.dart';
 
+import '../cubit/assistant_cubit.dart';
+
 /// The Aegis catalog ID. Must be cited verbatim in the
 /// `createSurface.catalogId` field by the agent. Reverse-domain so it
 /// won't collide with other catalogs a host app might mount.
@@ -744,6 +746,7 @@ final CatalogItem incidentReportCard = _buildCard(
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          const _EvidenceBlock(),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 360),
             child: Container(
@@ -928,6 +931,104 @@ List<String> _stringList(Object? raw) {
     ];
   }
   return const <String>[];
+}
+
+/// Evidence header for the IncidentReportCard. Surfaces the original
+/// user input (image, voice transcript, typed text) above the filled
+/// report body so the responder can compare what was captured against
+/// what the model wrote. Reads from [AssistantCubit.evidenceSink] —
+/// a top-level [ValueNotifier] — because genui's `Surface` widget
+/// mounts catalog children outside our [BlocProvider] inheritance
+/// chain, so a direct `BlocBuilder` lookup throws
+/// `ProviderNotFoundException`. The sink is updated by the cubit on
+/// every intake submit and turn commit. Renders nothing when no
+/// evidence is attached.
+class _EvidenceBlock extends StatelessWidget {
+  const _EvidenceBlock();
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<AssistantEvidenceSnapshot>(
+      valueListenable: AssistantCubit.evidenceSink,
+      builder: (context, snapshot, _) {
+        final image = snapshot.image;
+        final text = snapshot.text;
+        final hasImage = image != null && image.isNotEmpty;
+        final hasText = text.trim().isNotEmpty;
+        if (!hasImage && !hasText) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.indigo.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: Colors.indigo.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.attach_file_outlined,
+                        size: 14, color: Colors.indigo),
+                    const SizedBox(width: 4),
+                    Text(
+                      'EVIDENCE CAPTURED',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6,
+                        color: Colors.indigo.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (hasImage)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 180),
+                      child: Image.memory(image, fit: BoxFit.cover),
+                    ),
+                  ),
+                if (hasImage && hasText) const SizedBox(height: 8),
+                if (hasText)
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.7),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.format_quote,
+                            size: 14, color: Colors.indigo),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: SelectableText(
+                            text.trim(),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Renders a multi-format disaster-report body as structured UI.

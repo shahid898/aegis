@@ -25,6 +25,34 @@ part 'assistant_cubit.freezed.dart';
 /// [AssistantState.turns] when the model finishes responding to a turn so
 /// the UI can render the running history (the previous transcript/response
 /// pair otherwise gets clobbered the moment the next utterance starts).
+/// Snapshot of the user's most recent intake evidence — what the
+/// model is reasoning about right now, OR what was attached to the
+/// last committed turn. Published via [AssistantCubit.evidenceSink]
+/// so catalog widgets can render the original photo + transcript
+/// alongside the LLM-emitted report without depending on a
+/// BlocProvider inheritance chain that genui's Surface widget
+/// breaks.
+@immutable
+class AssistantEvidenceSnapshot {
+  const AssistantEvidenceSnapshot({this.image, this.text = ''});
+
+  final Uint8List? image;
+  final String text;
+
+  bool get isEmpty =>
+      (image == null || image!.isEmpty) && text.trim().isEmpty;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AssistantEvidenceSnapshot &&
+          other.text == text &&
+          (other.image?.length ?? 0) == (image?.length ?? 0);
+
+  @override
+  int get hashCode => Object.hash(text, image?.length);
+}
+
 @immutable
 class ConversationTurn {
   const ConversationTurn({
@@ -169,6 +197,21 @@ class AssistantCubit extends Cubit<AssistantState> {
   }
 
   static const String surfaceId = 'aegis-home';
+
+  /// Static evidence broadcast so catalog widgets can render the
+  /// user's most recent intake (image bytes + transcript text) without
+  /// going through BlocProvider. genui's `Surface` widget mounts its
+  /// children via an internal element tree that does NOT inherit our
+  /// `BlocProvider<AssistantCubit>` scope — wrapping the Surface in a
+  /// `BlocProvider.value` above it is not enough, because the
+  /// CatalogItem builders pull their `BuildContext` from inside that
+  /// internal tree. A top-level `ValueNotifier` sidesteps the
+  /// inheritance problem entirely. The cubit publishes here on every
+  /// `_onIntakeSubmit`, every turn commit, and every reset.
+  static final ValueNotifier<AssistantEvidenceSnapshot> evidenceSink =
+      ValueNotifier<AssistantEvidenceSnapshot>(
+    const AssistantEvidenceSnapshot(),
+  );
 
   /// Catalog handed to the host page so it can mount the same set of
   /// CatalogItems on a snapshot SurfaceController for past-turn replay.
@@ -874,6 +917,10 @@ class AssistantCubit extends Cubit<AssistantState> {
         thinkingTrace: assistantText,
         pendingUserImage: null,
       ));
+      AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
+        image: committed.userImage,
+        text: committed.user,
+      );
 
       // If the agent emitted a usable surface, pause for verification.
       // ConfirmActionBar inside the surface OR the auto-timer drives
@@ -1112,6 +1159,10 @@ class AssistantCubit extends Cubit<AssistantState> {
       transcript: visibleUserText,
       pendingUserImage: _pendingImageJpeg,
     ));
+    AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
+      image: _pendingImageJpeg,
+      text: visibleUserText,
+    );
     // Wipe the existing surface so the still-mounted TriageIntakeCard
     // disappears the moment the user taps "Analyse with Aegis". Without
     // this the card hangs around between the cubit's `surfaceReady=false`

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genui/genui.dart' as genui;
+import 'package:geolocator/geolocator.dart';
 import 'package:image/image.dart' as img;
 
 import '../../../core/voice/audio_recorder_service.dart';
@@ -753,11 +754,13 @@ class AssistantCubit extends Cubit<AssistantState> {
         'historyLines=${history.length}',
       );
     }
+    final gpsContext = await _resolveGpsContext();
     _llmSub = _llm
         .triageStream(TriageInput(
           userText: transcript,
           incidentLog: history,
           imageJpeg: intakeImage,
+          gpsContext: gpsContext,
         ))
         .listen(
       (chunk) {
@@ -1198,6 +1201,45 @@ class AssistantCubit extends Cubit<AssistantState> {
       return 'surfaceId=${msg.surfaceId}';
     }
     return '';
+  }
+
+  /// Best-effort GPS fix for the in-flight triage turn. Times out fast
+  /// (3s) — we don't want a slow lock to delay every report. Returns
+  /// null if permission is denied, the service is off, or the lookup
+  /// fails; the LLM treats the field as optional and still emits a
+  /// report (just with `[UNKNOWN]` for location). Never asks for
+  /// permission here — onboarding's permissions step owns that flow.
+  Future<String?> _resolveGpsContext() async {
+    try {
+      final serviceOn = await Geolocator.isLocationServiceEnabled();
+      if (!serviceOn) return null;
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 3),
+        ),
+      );
+      final lat = pos.latitude.toStringAsFixed(5);
+      final lng = pos.longitude.toStringAsFixed(5);
+      final acc = pos.accuracy.isFinite
+          ? ' (±${pos.accuracy.toStringAsFixed(0)}m)'
+          : '';
+      final ctx = 'lat=$lat, lng=$lng$acc';
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] gpsContext=$ctx');
+      }
+      return ctx;
+    } on Exception catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] gps lookup failed: $e');
+      }
+      return null;
+    }
   }
 
   List<String> _surfaceComponentTypes() {

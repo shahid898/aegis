@@ -1,11 +1,7 @@
 ---
 name: compose-briefing
-description: Compose a personalized pre-disaster situational briefing
-  for the survivor. Pulls from current GPS location, the active region
-  pack (shelters, evacuation routes, weather), and the user's
-  accessibility profile. Use when the user asks "what's the situation",
-  "brief me", "what do I need to know", or before the user starts
-  an emergency action.
+description: Pre-disaster briefing from GPS + region pack. Triggers on
+  "what's the situation", "brief me", "what do I need to know".
 ---
 
 # Compose Briefing

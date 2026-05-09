@@ -29,7 +29,7 @@ class SkillsRegistry {
     'plan-evacuation-route',
     'grade-damage-hazus',
     'intake-survivor-statement',
-    'generate-ics-209',
+    'disaster-report-generator',
     'match-mesh-beacon',
   ];
 

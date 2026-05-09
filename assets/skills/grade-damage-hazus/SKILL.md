@@ -1,10 +1,7 @@
 ---
 name: grade-damage-hazus
-description: Grade structural damage from a photograph using the
-  FEMA HAZUS damage scale (Slight / Moderate / Extensive / Complete,
-  numbered 1-4). Use when a responder photographs a building, vehicle,
-  or scene and asks for a damage classification, or as a sub-step of
-  generate-ics-209.
+description: Grade damage photo on FEMA HAZUS scale (1=Slight, 2=Moderate,
+  3=Extensive, 4=Complete). Sub-step of disaster-report-generator.
 ---
 
 # Grade Damage with FEMA HAZUS
@@ -13,7 +10,7 @@ description: Grade structural damage from a photograph using the
 
 Triage Mode (responder) captures a JPEG of a building or scene and
 needs an actionable damage label. May be invoked directly, or as a
-sub-step of `generate-ics-209` when a report is being composed.
+sub-step of `disaster-report-generator` when a report is being composed.
 
 ## FEMA HAZUS damage scale
 

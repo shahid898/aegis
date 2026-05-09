@@ -453,13 +453,61 @@ class LlmService {
   ///     surfaced via [TriageInput.incidentLog]. The agent reads the
   ///     log as part of the system prompt at every turn — no
   ///     conversational state has to survive between sessions.
-  Stream<String> triageStream(TriageInput input, {int maxTokens = 2048}) async* {
+  // Triage budget at 6144 because the bundled Gemma 4 E2B model
+  // treats `max_tokens` as the engine's *total* context (input +
+  // image patches + output), not just decode room. The vision
+  // preprocessor resizes any photo up to ~768x768 = 2304 patches to
+  // hit the model's `max_num_patches: 2520` ceiling, regardless of
+  // the source image size. With the compressed system prompt
+  // (~750 tok) and a typical user line (<20 tok), 6144 leaves
+  // ~3000 tokens of decode room — enough headroom for both JSON
+  // envelopes plus a multi-sentence description even if the model
+  // wanders. Engine memory cost scales linearly with max_tokens;
+  // arm64 mid-range devices (Pixel 7 / Galaxy S20+) handle 6144
+  // with ~150MB extra heap. Drop to 4096 if cold-start ms regresses.
+  Stream<String> triageStream(TriageInput input, {int maxTokens = 6144}) async* {
     try {
       yield* _triageStreamOnce(input, maxTokens: maxTokens);
     } on Object catch (e) {
-      if (!await _shouldFallbackToCpu(e)) rethrow;
-      yield* _triageStreamOnce(input, maxTokens: maxTokens);
+      // Two recoverable failure modes share this path:
+      //   1. OpenCL delegate unavailable → swap engine to CPU.
+      //   2. Engine OOM at the 6144 ceiling on low-RAM devices →
+      //      tear the model down and retry at 4096. Cold-start cost
+      //      scales linearly with max_tokens, so the 4096 fallback
+      //      cuts ~12s off init at the price of ~1500 fewer decode
+      //      tokens (still enough for both envelopes).
+      if (await _shouldFallbackToCpu(e)) {
+        yield* _triageStreamOnce(input, maxTokens: maxTokens);
+        return;
+      }
+      if (await _shouldFallbackToSmallerContext(e, maxTokens)) {
+        yield* _triageStreamOnce(input, maxTokens: 4096);
+        return;
+      }
+      rethrow;
     }
+  }
+
+  Future<bool> _shouldFallbackToSmallerContext(
+    Object error,
+    int currentMaxTokens,
+  ) async {
+    if (currentMaxTokens <= 4096) return false;
+    final message = error.toString().toLowerCase();
+    final isOom = message.contains('oom') ||
+        message.contains('out of memory') ||
+        message.contains('failed to create engine') ||
+        message.contains('mmap_status') ||
+        message.contains('allocation');
+    if (!isOom) return false;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] OOM at maxTokens=$currentMaxTokens, '
+        'falling back to 4096: $error',
+      );
+    }
+    await _disposeModel();
+    return true;
   }
 
   Stream<String> _triageStreamOnce(
@@ -492,13 +540,14 @@ class LlmService {
 
     final sessionSw = Stopwatch()..start();
     final session = await model.createSession(
-      // Triage outputs are structured JSON, not creative prose. Lower
-      // temperature keeps the model from drifting into fields the
-      // schema doesn't recognise. Not zero — we still want the
-      // spoken_response and thinking_trace to read like natural
-      // language.
-      temperature: 0.4,
-      topK: 40,
+      // Triage outputs are structured JSON, but greedy decoding
+      // (temp 0.2, topK 1) made the model under-fill long bodies —
+      // it treated the shortest valid envelope as a satisfying stop
+      // and skipped the IncidentReportCard. 0.5 / topK 32 widens
+      // the search just enough that the model commits to the full
+      // surface tree without going off-rails on field values.
+      temperature: 0.5,
+      topK: 32,
       topP: 0.9,
       enableAudioModality: input.hasAudio,
       enableVisionModality: input.hasImage,
@@ -598,65 +647,65 @@ class LlmService {
     final catalogId = _triageCatalog?.catalogId ?? 'unset';
 
     return '''
-You are Aegis, an offline emergency assistant. Reply in plain prose
-for normal conversation. $speakRule Keep prose short. For
-life-threatening situations, tell the user to call emergency services.
+You are Aegis, an offline emergency assistant. $speakRule Keep prose short.
+For life-threatening events, tell the user to call emergency services.
 
-WHEN to emit a surface: any time the user reports a hazard, damage,
-casualty, missing person, or asks for evacuation / shelter / a
-checklist. Even a one-line report ("I see a building collapsed") is
-enough — fill placeholder values for unknowns; the user will edit.
-Do NOT keep asking follow-up questions when you could draft a card
-they can correct.
+When the user reports hazard / damage / casualty / missing person, emit
+TWO fenced ```json blocks back-to-back: first `createSurface`, then
+`updateComponents` containing:
+  1. A summary card (DamageCard / CasualtyCard / etc).
+  2. ALWAYS an `IncidentReportCard` carrying the FULL filled report
+     body in a named format (default ICS-209). This is REQUIRED for
+     every triage turn — Aegis's whole purpose is to draft the
+     report, not just summarise. skill_invoked MUST be
+     `disaster-report-generator` whenever an IncidentReportCard is
+     present.
+  3. A ConfirmActionBar.
+Both fenced blocks MUST close cleanly. Card descriptions ≤180 chars.
 
-HOW to emit a surface: send TWO JSON envelopes back-to-back, in fenced
-code blocks, in this exact order. Emitting only `createSurface` shows
-nothing — never do that.
-
-EXAMPLE INPUT  → "I see a building collapsed." (with photo of rubble)
-EXAMPLE OUTPUT →
-Drafted a damage report. Confirm or edit.
+Example (image of rubble + "building collapsed"):
+Drafted an ICS-209 damage report. Confirm or edit.
 ```json
 {"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
 ```
 ```json
-{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"grade-damage-hazus","children":["d","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Multi-storey concrete building partially collapsed; visible reinforcement bars and dust cloud. Two adjacent walls down, debris fills the street to roughly knee height. Primary structure is unsafe to re-enter."},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"disaster-report-generator","children":["d","r","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Concrete mid-rise partially collapsed; rebar exposed, debris to knee height. Unsafe to re-enter."},{"id":"r","component":"IncidentReportCard","format":"ICS-209","title":"Building Collapse Incident","report_number":"Initial","prepared_at":"2026-05-10T18:42:00Z","prepared_by":"[INFERRED — verify before submission]","body":"INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Building Collapse Incident\\nBLOCK 3. REPORT VERSION: [X] Initial\\nBLOCK 5. DATE/TIME: 2026-05-10 1842\\nBLOCK 7. INCIDENT TYPE: [X] Search & Rescue\\nBLOCK 14. SITUATION: Multi-storey concrete mid-rise partially collapsed, rebar exposed, debris to knee height. Structure unsafe to re-enter.\\nBLOCK 16. PUBLIC: Fatal: [UNKNOWN] | Injured: [UNKNOWN] | Missing: [UNKNOWN]\\nBLOCK 20. STRUCTURES: Threatened: 1 | Damaged: 0 | Destroyed: 1\\nBLOCK 23. OUTLOOK: Search-and-rescue ops pending; access via north flank only.\\nBLOCK 28. PREPARED BY: [INFERRED — verify before submission]"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
 ```
 
-Available content cards (pick the one that matches the user's situation):
-* `DamageCard` — physical damage to a structure or asset (collapse, fire,
-  flooding, shaking damage). Requires a HAZUS category and a description.
-* `CasualtyCard` — a person is hurt, trapped, missing, or unreachable.
-  Use this when the user reports being stuck, pinned, bleeding, unable
-  to move, or any injury / entrapment situation.
-* `BeaconMatchCard` — the user's mesh beacon picked up another nearby
-  beacon and we want to surface the match for triage.
-* `ResourceRequestCard` — the user is asking for supplies (water, meds,
-  power, fuel, blankets) or rescue equipment.
-* `ShelterPreviewCard` — show the closest shelter (name, distance, ETA)
-  when the user asks where to go.
-* `MapFragment` — render a small map preview alongside another card.
-* `GoBagChecklist` — emit when the user wants an evacuation checklist.
+Cards (root id MUST be "root"; always include ConfirmActionBar):
+- DamageCard — structure/asset damage (HAZUS 1-4)
+- CasualtyCard — person hurt/trapped/missing
+- BeaconMatchCard — mesh-beacon match
+- ResourceRequestCard — supplies/rescue ask
+- ShelterPreviewCard — nearest shelter
+- MapFragment — small map alongside
+- GoBagChecklist — evacuation checklist
+- IncidentReportCard — full filled report body in a named format
+  (ICS-209, OCHA_SITREP, UN_FLASH_UPDATE, NDRRMC, IFRC_OPS_UPDATE,
+  EU_ECHO_FLASH, PDNA). REQUIRED whenever skill_invoked is
+  `disaster-report-generator`. Fields: format, title, report_number,
+  prepared_at, prepared_by, body (full filled template, ~1-3 KB,
+  preserve newlines with \\n).
+Do NOT emit ThinkingTraceDrawer.
 
-Always pair a content card with a `ConfirmActionBar` so the user can
-confirm or edit. Layouts: Column, Row, Text. Root id MUST be "root".
-Do NOT emit ThinkingTraceDrawer — it is debug-only chrome the host
-renders automatically.
-
-CRITICAL: when an image is attached you MUST actually look at it and
-write a concrete `description` describing what you see — visible
-hazards, injuries, structural state, debris, blood, smoke, occupants
-— NOT a generic placeholder like "details pending". Pick the
-`category` and `fema_scale` from what the image shows, not from the
-text alone.
+If image attached: actually look at it and describe what you see (hazards,
+injuries, debris, smoke, occupants). Pick category + fema_scale from image.
 
 $skillsCatalog
-On the root Column, set `skill_invoked` to the id of the single best
-matching skill from the list above (or omit when nothing fits).
-Examples: a casualty / trapped / injured person → `intake-survivor-statement`;
-a damage photo → `grade-damage-hazus`; "make a report" / "file it" →
-`generate-ics-209`; "where do I go" / "how do I get out" →
-`plan-evacuation-route`.
+On root Column set `skill_invoked` to one of the ids above when applicable:
+casualty/trapped → intake-survivor-statement; damage photo → grade-damage-hazus;
+"make a report"/"file it"/"SitRep"/"Flash Update"/"NDRRMC"/"ICS-209"/
+"PDNA"/"IFRC appeal"/"ECHO flash" → disaster-report-generator;
+"how do I get out"/"where do I go" → plan-evacuation-route.
+
+When skill_invoked is `disaster-report-generator`, the surface MUST
+include an `IncidentReportCard` with the picked format and the full
+filled report body. Pick format: US/FEMA → ICS-209; UN/NGO ongoing →
+OCHA_SITREP; first 72 hrs after sudden-onset → UN_FLASH_UPDATE;
+Philippines/SE Asia → NDRRMC; Red Cross → IFRC_OPS_UPDATE; EU
+member state → EU_ECHO_FLASH; recovery planning → PDNA. Default to
+ICS-209 if ambiguous. Fill every required block; mark unknowns with
+`[INFERRED — verify before submission]` or `[UNKNOWN — to be confirmed]`.
 
 Never invent locations or identifiers not in the user's message.
 ''';
@@ -675,6 +724,14 @@ Never invent locations or identifiers not in the user's message.
         ? '(no spoken text — see attached evidence)'
         : input.userText.trim();
     buf.writeln('User: $user');
+
+    // Stamp the report with the moment of capture so
+    // `disaster-report-generator` and downstream skills can populate
+    // the Date/Time fields without guessing. ISO-8601 in UTC keeps it
+    // unambiguous across regions; the skill localises for output.
+    final nowIso =
+        '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
+    buf.writeln('Captured at: $nowIso');
 
     // Only include a short evidence line when something was actually
     // captured. Empty fields just waste tokens.

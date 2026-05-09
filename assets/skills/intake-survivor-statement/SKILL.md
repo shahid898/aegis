@@ -1,10 +1,7 @@
 ---
 name: intake-survivor-statement
-description: Capture, transcribe, and translate a survivor's verbal
-  statement into a triage-ready record. Apply START triage if the
-  statement describes a casualty. Use when a responder records a
-  survivor speaking, when a survivor self-reports trapped or injured
-  family members, or as a sub-step of generate-ics-209.
+description: Transcribe survivor statement, apply START triage. Triggers
+  on injury / trapped / missing person reports.
 ---
 
 # Intake Survivor Statement

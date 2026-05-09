@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:genui/genui.dart';
 import 'package:json_schema_builder/json_schema_builder.dart';
 
@@ -682,6 +683,141 @@ final CatalogItem shelterPreviewCard = _buildCard(
 ]''',
 );
 
+/// Long-form incident report card. Used by the
+/// `disaster-report-generator` skill to surface the FILLED template
+/// body (ICS-209, OCHA SitRep, UN Flash Update, NDRRMC, IFRC, EU
+/// ECHO, PDNA) verbatim — the smaller domain cards summarise; this
+/// one carries the printable narrative the responder hands off.
+///
+/// Renders the body in a scrollable monospace block so the report's
+/// indentation and table layout survive intact, plus a "Copy" button
+/// so the responder can paste it into the agency's intake system
+/// without retyping. Title shows the format + report number; subtitle
+/// shows incident name and date/time stamp.
+final CatalogItem incidentReportCard = _buildCard(
+  name: 'IncidentReportCard',
+  description: 'Long-form filled incident report (ICS-209, OCHA SitRep, '
+      'UN Flash Update, NDRRMC, IFRC, EU ECHO, PDNA). Emitted by the '
+      'disaster-report-generator skill alongside the summary cards.',
+  schema: S.object(
+    description: 'A printable incident report body in a named format.',
+    properties: {
+      'format': S.string(
+        description: 'ICS-209 | OCHA_SITREP | UN_FLASH_UPDATE | NDRRMC | '
+            'IFRC_OPS_UPDATE | EU_ECHO_FLASH | PDNA',
+      ),
+      'title': S.string(description: 'Incident name as shown in Block 1 / header.'),
+      'report_number': S.string(description: 'Report version, eg. "Update #3" or "Flash No. 2".'),
+      'prepared_at': S.string(description: 'ISO-8601 timestamp the report was drafted.'),
+      'prepared_by': S.string(description: 'Author + agency, eg. "S. Yamamoto (SITL) — USFS".'),
+      'body': S.string(
+        description: 'Full filled report text, preserving line breaks and '
+            'indentation. Up to ~4 KB. Use placeholders like '
+            '"[INFERRED — verify before submission]" for fields the '
+            'responder must confirm.',
+      ),
+    },
+    required: ['format', 'body'],
+  ),
+  builder: (data, ctx) {
+    final format = (data['format'] as String?) ?? 'REPORT';
+    final title = (data['title'] as String?) ?? '';
+    final reportNumber = (data['report_number'] as String?) ?? '';
+    final preparedAt = (data['prepared_at'] as String?) ?? '';
+    final preparedBy = (data['prepared_by'] as String?) ?? '';
+    final body = (data['body'] as String?) ?? '';
+
+    final headerLine = [
+      if (title.isNotEmpty) title,
+      if (reportNumber.isNotEmpty) reportNumber,
+    ].join(' — ');
+    final footerLine = [
+      if (preparedBy.isNotEmpty) preparedBy,
+      if (preparedAt.isNotEmpty) preparedAt,
+    ].join(' · ');
+
+    return _AegisCard(
+      icon: Icons.description_outlined,
+      iconColor: Colors.indigo,
+      title: format,
+      subtitle: headerLine.isEmpty ? null : headerLine,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 360),
+            child: Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.indigo.withValues(alpha: 0.04),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.indigo.withValues(alpha: 0.18),
+                ),
+              ),
+              child: Scrollbar(
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    body.isEmpty ? '(empty report)' : body,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      height: 1.35,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisSize.min == MainAxisSize.min
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                onPressed: body.isEmpty
+                    ? null
+                    : () async {
+                        await Clipboard.setData(ClipboardData(text: body));
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text('Report copied to clipboard'),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                        }
+                      },
+                icon: const Icon(Icons.copy_outlined, size: 18),
+                label: const Text('Copy'),
+              ),
+            ],
+          ),
+        ],
+      ),
+      footer: footerLine.isEmpty
+          ? null
+          : Text(footerLine,
+              style: Theme.of(ctx).textTheme.bodySmall),
+      accentColor: Colors.indigo,
+    );
+  },
+  exampleJson: '''
+[
+  {
+    "id": "root",
+    "component": "IncidentReportCard",
+    "format": "ICS-209",
+    "title": "Redrock Canyon Fire",
+    "report_number": "Update #3",
+    "prepared_at": "2026-05-10T06:00:00Z",
+    "prepared_by": "S. Yamamoto (SITL) — USFS",
+    "body": "INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Redrock Canyon Fire\\nBLOCK 7. INCIDENT TYPE: [X] Wildfire\\nBLOCK 14. SITUATION: 4,820 acres, 22% contained..."
+  }
+]''',
+);
+
 /// The full Aegis catalog — basic A2UI items (Column, Row, Text, etc.)
 /// plus the 9 disaster-domain cards above. The agent picks ids from
 /// either set when composing a surface.
@@ -708,6 +844,7 @@ Catalog buildAegisCatalog() {
       mapFragment,
       goBagChecklist,
       shelterPreviewCard,
+      incidentReportCard,
     ],
     catalogId: aegisCatalogId,
   );

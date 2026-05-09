@@ -133,5 +133,5 @@ flutter:
     - assets/skills/plan-evacuation-route/
     - assets/skills/grade-damage-hazus/
     - assets/skills/intake-survivor-statement/
-    - assets/skills/generate-ics-209/
+    - assets/skills/disaster-report-generator/
     - assets/skills/match-mesh-beacon/

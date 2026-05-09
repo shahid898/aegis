@@ -1,11 +1,7 @@
 ---
 name: match-mesh-beacon
-description: Cross-reference a survivor statement, photo, or incident
-  description against mesh beacons in the local incident log. Returns
-  a confidence score so a responder can confirm whether two reports
-  describe the same person or location. Use as a sub-step of
-  generate-ics-209 or when the user asks "is there a beacon for
-  this person".
+description: Cross-reference report against local mesh-beacon log;
+  returns match-confidence score. Triggers on "is there a beacon for X".
 ---
 
 # Match Mesh Beacon

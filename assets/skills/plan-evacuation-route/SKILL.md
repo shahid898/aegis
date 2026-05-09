@@ -1,11 +1,7 @@
 ---
 name: plan-evacuation-route
-description: Plan an accessibility-aware evacuation route from the
-  user's current GPS to the nearest safe shelter, accounting for
-  blocked roads, the user's mobility profile, and any reported
-  hazards in the incident log. Use when the user asks "how do I get
-  out", "where do I go", "what's the safest route", or when an
-  evacuation order is in effect.
+description: Plan evacuation route from GPS to nearest shelter.
+  Triggers on "how do I get out", "where do I go", "safest route".
 ---
 
 # Plan Evacuation Route

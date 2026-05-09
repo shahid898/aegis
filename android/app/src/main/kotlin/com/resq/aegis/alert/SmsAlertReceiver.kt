@@ -81,21 +81,25 @@ class SmsAlertReceiver : BroadcastReceiver() {
         val severity = intent.getStringExtra(AlertConstants.EXTRA_ALERT_SEVERITY)
             ?: AlertEvent.SEVERITY_UNKNOWN
 
-        val event = AlertEvent(
-            id = intent.getStringExtra(AlertConstants.EXTRA_ALERT_ID)
-                ?: UUID.randomUUID().toString(),
-            source = AlertEvent.SOURCE_SIMULATION,
-            sender = sender,
-            body = body,
-            receivedAtEpochMs = System.currentTimeMillis(),
-            severity = severity,
+        // Simulations now go through the same PENDING → LLM verdict →
+        // ESCALATE/DISMISS pipeline as real SMS so the demo exercises
+        // FunctionRouter's promo-vs-emergency classifier. The cached
+        // FlutterEngine in [AegisApplication] keeps the Dart isolate
+        // alive even after the user swipes the app away, so the LLM
+        // verdict still lands and either fires the siren or silently
+        // dismisses the heads-up — exactly as production behaves.
+        dispatch(
+            context = context,
+            event = AlertEvent(
+                id = intent.getStringExtra(AlertConstants.EXTRA_ALERT_ID)
+                    ?: UUID.randomUUID().toString(),
+                source = AlertEvent.SOURCE_SIMULATION,
+                sender = sender,
+                body = body,
+                receivedAtEpochMs = System.currentTimeMillis(),
+                severity = severity,
+            ),
         )
-        dispatch(context, event)
-        // Simulations skip LLM routing — escalate immediately so the CONFIRMED
-        // notification (loud, persistent) is posted before the user kills the app.
-        // The intents are serialized by the service so SHOW_ALERT always arrives
-        // before ESCALATE_ALERT.
-        AlertForegroundService.escalate(context, event.id)
     }
 
     private fun dispatch(context: Context, event: AlertEvent) {

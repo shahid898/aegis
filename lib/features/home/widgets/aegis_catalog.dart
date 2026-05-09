@@ -757,23 +757,14 @@ final CatalogItem incidentReportCard = _buildCard(
               ),
               child: Scrollbar(
                 child: SingleChildScrollView(
-                  child: SelectableText(
-                    body.isEmpty ? '(empty report)' : body,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      height: 1.35,
-                    ),
-                  ),
+                  child: _IncidentReportBody(body: body),
                 ),
               ),
             ),
           ),
           const SizedBox(height: 8),
           Row(
-            mainAxisAlignment: MainAxisSize.min == MainAxisSize.min
-                ? MainAxisAlignment.end
-                : MainAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton.icon(
                 onPressed: body.isEmpty
@@ -937,6 +928,238 @@ List<String> _stringList(Object? raw) {
     ];
   }
   return const <String>[];
+}
+
+/// Renders a multi-format disaster-report body as structured UI.
+/// Detects three line shapes:
+///
+///   * **Section heading** — uppercase line with no `:`, or a line
+///     wrapped in box-drawing dashes. Bigger weight, indigo accent,
+///     extra top padding.
+///   * **Field row** — `LABEL: VALUE`. Label in muted bold, value in
+///     normal weight, wrapped on overflow. `[INFERRED — verify…]`
+///     and `[UNKNOWN…]` markers get an amber chip pill so the
+///     responder can spot edits at a glance.
+///   * **Free-form line** — plain body text. Indented under the
+///     current section heading.
+///
+/// Format-agnostic — works for ICS-209 BLOCK lines, OCHA "AT A
+/// GLANCE", NDRRMC PUBLIC STATUS SUMMARY, etc. Falls back gracefully
+/// when the body has no recognisable structure (renders as monospace
+/// pre-block).
+class _IncidentReportBody extends StatelessWidget {
+  const _IncidentReportBody({required this.body});
+
+  final String body;
+
+  static final RegExp _fieldPattern = RegExp(r'^\s*([^:\n]{1,80}?):\s*(.*)$');
+  static final RegExp _placeholderPattern =
+      RegExp(r'\[(?:INFERRED|UNKNOWN)[^\]]*\]', caseSensitive: false);
+
+  /// Strip noisy admin prefixes ICS-209 / NDRRMC use ("BLOCK 1.",
+  /// "Section 4.", "1.2", etc) and Title Case the surviving label so
+  /// "BLOCK 16. PUBLIC" reads as "Public" — the block number is
+  /// agency-internal noise that hurts at-a-glance scan in the
+  /// responder UI.
+  /// Strip pure box-drawing / dash-rule decoration from a heading.
+  /// Returns empty when the whole line is a horizontal rule so the
+  /// caller renders a Divider instead.
+  static String _cleanHeading(String raw) {
+    var s = raw.trim();
+    s = s.replaceAll(RegExp(r'^[─━—=─]+|[─━—=─]+\$'), '').trim();
+    s = s.replaceAll(RegExp(r'\s+[─━—=─]+\s*'), ' ').trim();
+    if (s.replaceAll(RegExp(r'[─━—=─\s]'), '').isEmpty) return '';
+    final words = s.split(RegExp(r'\s+'));
+    return words.map((w) {
+      if (w.isEmpty) return w;
+      if (w.length <= 3 && w == w.toUpperCase()) return w;
+      return '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}';
+    }).join(' ');
+  }
+
+  static String _cleanLabel(String raw) {
+    var s = raw.trim();
+    s = s.replaceFirst(
+        RegExp(r'^(?:BLOCK|SECTION|ITEM)\s+\d+[A-Za-z]?\.?\s*',
+            caseSensitive: false),
+        '');
+    s = s.replaceFirst(RegExp(r'^\d+(?:\.\d+)?\.?\s*'), '');
+    if (s.isEmpty) return raw.trim();
+    final words = s.split(RegExp(r'\s+'));
+    return words.map((w) {
+      if (w.isEmpty) return w;
+      if (w.length <= 3 && w == w.toUpperCase()) return w; // keep IC, GPS, NFI
+      return '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}';
+    }).join(' ');
+  }
+
+  bool _isHeading(String line) {
+    final stripped = line.trim();
+    if (stripped.isEmpty) return false;
+    if (stripped.length < 3) return false;
+    if (stripped.contains(':') && !stripped.endsWith(':')) return false;
+    final letters = stripped.replaceAll(RegExp(r'[^A-Za-z]'), '');
+    if (letters.isEmpty) return false;
+    final upperRatio =
+        letters.split('').where((c) => c == c.toUpperCase()).length /
+            letters.length;
+    return upperRatio > 0.85;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) {
+      return const Text(
+        '(empty report)',
+        style: TextStyle(fontSize: 12, color: Colors.black54),
+      );
+    }
+    final lines = trimmed.split('\n');
+    final widgets = <Widget>[];
+    var prevWasHeading = false;
+    for (var i = 0; i < lines.length; i++) {
+      final raw = lines[i];
+      final line = raw.trimRight();
+      if (line.trim().isEmpty) {
+        widgets.add(const SizedBox(height: 6));
+        prevWasHeading = false;
+        continue;
+      }
+      if (_isHeading(line)) {
+        final headingText = _cleanHeading(line);
+        if (headingText.isEmpty) {
+          // Pure rule line (e.g. ─── or ===) — render as divider.
+          widgets.add(const Padding(
+            padding: EdgeInsets.symmetric(vertical: 6),
+            child: Divider(height: 1, color: Colors.indigo, thickness: 1),
+          ));
+          prevWasHeading = true;
+          continue;
+        }
+        widgets.add(Padding(
+          padding: EdgeInsets.only(top: widgets.isEmpty ? 0 : 10, bottom: 4),
+          child: SelectableText(
+            headingText,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: Colors.indigo,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ));
+        prevWasHeading = true;
+        continue;
+      }
+      final match = _fieldPattern.firstMatch(line);
+      if (match != null) {
+        final label = _cleanLabel(match.group(1)!);
+        final value = match.group(2)!.trim();
+        widgets.add(Padding(
+          padding: EdgeInsets.only(
+            left: prevWasHeading ? 4 : 0,
+            top: 2,
+            bottom: 2,
+          ),
+          child: _ReportFieldRow(label: label, value: value),
+        ));
+        prevWasHeading = false;
+        continue;
+      }
+      widgets.add(Padding(
+        padding: EdgeInsets.only(left: prevWasHeading ? 4 : 0, bottom: 2),
+        child: SelectableText(
+          line,
+          style: const TextStyle(fontSize: 12, height: 1.4),
+        ),
+      ));
+      prevWasHeading = false;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: widgets,
+    );
+  }
+}
+
+class _ReportFieldRow extends StatelessWidget {
+  const _ReportFieldRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final labelText = '$label:';
+    final spans = <InlineSpan>[];
+    if (value.isEmpty) {
+      spans.add(const TextSpan(
+        text: '—',
+        style: TextStyle(color: Colors.black38),
+      ));
+    } else {
+      var cursor = 0;
+      for (final match
+          in _IncidentReportBody._placeholderPattern.allMatches(value)) {
+        if (match.start > cursor) {
+          spans.add(TextSpan(text: value.substring(cursor, match.start)));
+        }
+        spans.add(WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: Container(
+            margin: const EdgeInsets.symmetric(horizontal: 2),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: Colors.amber.withValues(alpha: 0.45),
+              ),
+            ),
+            child: Text(
+              match.group(0)!,
+              style: const TextStyle(
+                fontSize: 11,
+                color: Colors.brown,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ));
+        cursor = match.end;
+      }
+      if (cursor < value.length) {
+        spans.add(TextSpan(text: value.substring(cursor)));
+      }
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          constraints: const BoxConstraints(minWidth: 96, maxWidth: 160),
+          padding: const EdgeInsets.only(right: 8, top: 1),
+          child: Text(
+            labelText,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.black54,
+            ),
+          ),
+        ),
+        Expanded(
+          child: SelectableText.rich(
+            TextSpan(
+              style: const TextStyle(fontSize: 12, height: 1.4),
+              children: spans,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// Shared visual chrome for the leaf cards. Keeps padding, hierarchy,

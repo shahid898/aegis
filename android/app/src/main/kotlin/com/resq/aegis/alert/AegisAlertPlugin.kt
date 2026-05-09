@@ -77,7 +77,49 @@ class AegisAlertPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 AlertForegroundService.dismissPending(ctx, id)
                 result.success(true)
             }
+            AlertConstants.METHOD_MOVE_TO_BACK -> {
+                moveToBack(ctx)
+                result.success(true)
+            }
             else -> result.notImplemented()
+        }
+    }
+
+    /**
+     * Remove the app's task from recents and finish the foreground
+     * Activity. Process keeps running because [AlertForegroundService]
+     * holds it alive — that's exactly what we want: the cached engine,
+     * the in-flight LLM verdict, and the FGS wake-lock all survive, but
+     * the Flutter UI is gone, the GPU is no longer split between
+     * Flutter and Gemma, and judges see "the app looks killed". The
+     * full-screen-intent re-foregrounds the app the moment the verdict
+     * is EMERGENCY.
+     *
+     * We resolve the Activity via [AegisApplication.foregroundActivity]
+     * because the plugin is attached to the cached `FlutterEngine`, not
+     * to an Activity binding (the cached-engine pattern doesn't deliver
+     * one). If no Activity is in the foreground (e.g. simulate triggered
+     * from a background path), we fall back to the launcher HOME intent
+     * — equivalent to pressing the Home key.
+     */
+    private fun moveToBack(ctx: Context) {
+        val activity = com.resq.aegis.AegisApplication.foregroundActivity?.get()
+        if (activity != null && !activity.isFinishing) {
+            try {
+                activity.finishAndRemoveTask()
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "finishAndRemoveTask failed, falling back to HOME", t)
+            }
+        }
+        val home = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_HOME)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        try {
+            ctx.startActivity(home)
+        } catch (t: Throwable) {
+            Log.w(TAG, "moveToBack HOME fallback failed", t)
         }
     }
 

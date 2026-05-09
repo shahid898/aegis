@@ -46,7 +46,13 @@ object AlertConstants {
     const val STATE_PENDING = "pending"
     const val STATE_CONFIRMED = "confirmed"
 
-    const val NOTIFICATION_CHANNEL_ID = "aegis_emergency_alert"
+    // Channel id bumped to v2 because Android freezes a notification
+    // channel's sound + vibration settings the moment it's first created;
+    // the only way to flip the loud channel from "alarm tone" to "silent
+    // (TTS handles audio)" on already-installed devices is to publish a
+    // new channel id. v1 will linger in the system settings UI but is
+    // never used again.
+    const val NOTIFICATION_CHANNEL_ID = "aegis_emergency_alert_v2"
     const val NOTIFICATION_CHANNEL_NAME = "Emergency alert"
     /** Silent companion channel used while an alert is PENDING — same
      *  visibility / DnD bypass as the loud channel, but no sound + low
@@ -87,4 +93,14 @@ object AlertConstants {
     const val METHOD_ESCALATE = "escalate"
     /** Dart → Kotlin: tear down a PENDING alert. Argument is the alert id. */
     const val METHOD_DISMISS_PENDING = "dismissPending"
+
+    /**
+     * Dart → Kotlin: send the launcher Activity to the back without
+     * destroying it. Used right after `simulate()` so the GPU isn't
+     * juggling the home-screen Flutter render and Gemma's KV-cache
+     * prefill at the same time — the home page would otherwise lag for
+     * ~25 s while the LLM decides. The cached engine, foreground
+     * service, and any in-flight verdict keep running in the background.
+     */
+    const val METHOD_MOVE_TO_BACK = "moveToBack"
 }

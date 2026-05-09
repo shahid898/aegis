@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -663,23 +665,22 @@ class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
 
     setState(() => _busy = true);
     try {
-      final result = await sl<AlertBridge>().simulate(
+      final bridge = sl<AlertBridge>();
+      await bridge.simulate(
         body: body,
         sender: sender.isEmpty ? null : sender,
         severity: _severity,
       );
       if (!mounted) return;
       navigator.pop();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            result == null
-                ? 'simulate() returned null — check the native logs.'
-                : 'Simulated alert ${result.id} delivered. '
-                      'Watch logcat for the FunctionGemma verdict.',
-          ),
-        ),
-      );
+      // Push the app to the back so the Flutter renderer stops drawing
+      // while Gemma's KV-cache prefill + decode hammers the GPU. Without
+      // this the home page lags for ~25 s while the LLM decides — with
+      // it, the user sees the silent "Aegis is analyzing this alert…"
+      // heads-up while the cached engine + foreground service keep the
+      // routing pipeline alive in the background. The full-screen-intent
+      // re-foregrounds the app the instant the verdict is EMERGENCY.
+      unawaited(bridge.moveToBack());
     } on PlatformException catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(

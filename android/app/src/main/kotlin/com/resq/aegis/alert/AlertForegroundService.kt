@@ -8,8 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.AudioAttributes
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -18,7 +16,6 @@ import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -344,12 +341,13 @@ class AlertForegroundService : Service() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
 
         if (nm.getNotificationChannel(AlertConstants.NOTIFICATION_CHANNEL_ID) == null) {
-            val audioAttrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            val sound: Uri = Settings.System.DEFAULT_ALARM_ALERT_URI
-                ?: Settings.System.DEFAULT_NOTIFICATION_URI
+            // Confirmed channel: high priority + full-screen-intent + DnD
+            // bypass + vibration, but **no alarm tone**. The user-facing
+            // briefing is delivered by the in-app TTS (multilingual, the
+            // user's own language) — the OS-level alarm ringtone would
+            // play in English over the top of it. Vibration + heads-up +
+            // lock-screen takeover still wake the user; the TTS handles
+            // the audio channel.
             val channel = NotificationChannel(
                 AlertConstants.NOTIFICATION_CHANNEL_ID,
                 AlertConstants.NOTIFICATION_CHANNEL_NAME,
@@ -360,7 +358,7 @@ class AlertForegroundService : Service() {
                 enableVibration(true)
                 setBypassDnd(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setSound(sound, audioAttrs)
+                setSound(null, null)
             }
             nm.createNotificationChannel(channel)
         }

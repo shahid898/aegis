@@ -32,7 +32,14 @@ class FunctionRouter {
   FunctionRouter({
     required LlmService llm,
     required VoiceModelPack chatPack,
-    int maxTokens = 512,
+    // LiteRT-LM treats `maxTokens` as the *total* prompt + output budget,
+    // not just output. The system instruction is ~1500 chars (~400 tokens)
+    // and the user prompt adds another ~50–100. With a 512-token ceiling
+    // the engine had ~50 output tokens — too tight for the
+    // VERDICT/SEVERITY/REASON/ACTIONS/BRIEFING/CONTACT_MESSAGE envelope,
+    // so it returned an empty string in <10 ms and every alert collapsed
+    // to dismiss. 1024 leaves ~500 output tokens.
+    int maxTokens = 1024,
   }) : _llm = llm,
        _chatPack = chatPack,
        _maxTokens = maxTokens;

@@ -28,6 +28,7 @@ class AlertBridge {
   static const String _methodGetPending = 'getPendingAlert';
   static const String _methodEscalate = 'escalate';
   static const String _methodDismissPending = 'dismissPending';
+  static const String _methodMoveToBack = 'moveToBack';
 
   final MethodChannel _channel;
   final StreamController<AlertEvent> _controller =
@@ -121,6 +122,21 @@ class AlertBridge {
       await _channel.invokeMethod<bool>(_methodDismissPending, alertId);
     } on PlatformException catch (e) {
       debugPrint('[AlertBridge] dismissPending failed: $e');
+    }
+  }
+
+  /// Push the host Activity to the back of the task stack — equivalent to
+  /// the user pressing the Home key. The Dart isolate, foreground service,
+  /// and any in-flight LLM verdict keep running; only the Flutter renderer
+  /// stops drawing, which frees the GPU for Gemma's prefill + decode pass.
+  /// The full-screen-intent re-foregrounds the app the moment the verdict
+  /// says EMERGENCY.
+  Future<void> moveToBack() async {
+    if (!_isSupported) return;
+    try {
+      await _channel.invokeMethod<bool>(_methodMoveToBack);
+    } on PlatformException catch (e) {
+      debugPrint('[AlertBridge] moveToBack failed: $e');
     }
   }
 

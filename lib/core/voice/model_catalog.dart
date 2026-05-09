@@ -235,11 +235,25 @@ class ModelCatalog {
   //
   // URL is parameterised via `--dart-define=AEGIS_GEMMA_URL=...` so an
   // app build can point at a private mirror if HuggingFace is unreachable.
+  //
+  // Pinned to commit 7fa1d78473894f7e736a21d920c3aa80f950c0db — the last
+  // single-signature vision build before the litert-community mirror
+  // landed an MTP drafter + multi-signature vision encoder (commit
+  // 6e5c4f1) that flutter_gemma 0.14.x's bundled libLiteRtLm.so cannot
+  // load. The newer revision of `main` triggers
+  //   "INVALID_ARGUMENT: The Vision Encoder model must have exactly one
+  //    signature but got 3"
+  // inside `litert_lm_engine_create`, blocking every triage turn even
+  // for text-only input. Tracked upstream in flutter_gemma#259; the
+  // permanent fix lands in flutter_gemma 0.15.0 once the native libs
+  // are rebuilt against a newer LiteRT-LM revision. Until then, pinning
+  // the model URL is the only working option that keeps audio + vision
+  // modalities functional.
   // ---------------------------------------------------------------------------
   static const String _gemmaUrl = String.fromEnvironment(
     'AEGIS_GEMMA_URL',
     defaultValue:
-        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm',
+        'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/7fa1d78473894f7e736a21d920c3aa80f950c0db/gemma-4-E2B-it.litertlm',
   );
 
   static const VoiceModelPack _gemma4E2bIt = VoiceModelPack(

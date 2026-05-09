@@ -344,7 +344,11 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     final hasHistory = state.turns.isNotEmpty;
     final hasSurface = state.surfaceReady;
     final isVerifying = state.stage == AssistantStage.awaitingConfirmation;
-    final hasInflight = hasTranscript || hasResponse || hasSurface;
+    final hasInflight = hasTranscript ||
+        hasResponse ||
+        hasSurface ||
+        (state.pendingUserImage?.isNotEmpty ?? false) ||
+        state.stage == AssistantStage.thinking;
 
     if (!hasInflight && !hasHistory) {
       return const Center(
@@ -379,6 +383,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   text: turn.user,
                   align: CrossAxisAlignment.end,
                   background: AegisColors.primary.withValues(alpha: 0.10),
+                  image: turn.userImage,
                 ),
                 const SizedBox(height: 12),
                 _Bubble(
@@ -398,20 +403,30 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
 
         // In-flight turn: streaming transcript, partial response, and/or
         // a live A2UI surface. The agent may emit any subset.
+        final hasPendingImage = (state.pendingUserImage?.isNotEmpty ?? false);
+        final showUser = hasTranscript || hasPendingImage;
+        final showThinking = state.stage == AssistantStage.thinking &&
+            !hasResponse &&
+            !hasSurface;
         return Padding(
           padding: EdgeInsets.only(top: isFirst ? 0 : 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (hasTranscript)
+              if (showUser)
                 _Bubble(
                   label: 'You',
                   text: state.transcript,
                   align: CrossAxisAlignment.end,
                   background: AegisColors.primary.withValues(alpha: 0.10),
+                  image: state.pendingUserImage,
                 ),
+              if (showThinking) ...[
+                if (showUser) const SizedBox(height: 12),
+                const _ThinkingBubble(),
+              ],
               if (hasResponse) ...[
-                if (hasTranscript) const SizedBox(height: 12),
+                if (showUser) const SizedBox(height: 12),
                 _Bubble(
                   label: 'Aegis',
                   text: state.response,
@@ -426,8 +441,16 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
               if (isVerifying) ...[
                 const SizedBox(height: 12),
                 _ThinkingTraceDrawer(trace: state.thinkingTrace),
-                const SizedBox(height: 12),
-                const _VerificationActions(),
+                // Host-owned reject/confirm row is only rendered when the
+                // surface itself doesn't already carry a ConfirmActionBar.
+                // The agent's prompt mandates a ConfirmActionBar, so 99% of
+                // turns this branch is skipped — keeping it as a fallback so
+                // a misbehaving model that forgets the action bar still
+                // leaves the user a way out.
+                if (!hasSurface) ...[
+                  const SizedBox(height: 12),
+                  const _VerificationActions(),
+                ],
               ],
             ],
           ),
@@ -701,15 +724,19 @@ class _Bubble extends StatelessWidget {
     required this.text,
     required this.align,
     required this.background,
+    this.image,
   });
 
   final String label;
   final String text;
   final CrossAxisAlignment align;
   final Color background;
+  final Uint8List? image;
 
   @override
   Widget build(BuildContext context) {
+    final hasText = text.isNotEmpty;
+    final hasImage = image != null && image!.isNotEmpty;
     return Column(
       crossAxisAlignment: align,
       children: [
@@ -732,13 +759,83 @@ class _Bubble extends StatelessWidget {
               color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
             ),
           ),
-          child: Text(
-            text,
-            style: const TextStyle(
-              color: AegisColors.onSurface,
-              fontSize: 16,
-              height: 1.35,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (hasImage)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: Image.memory(
+                      image!,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              if (hasImage && hasText) const SizedBox(height: 8),
+              if (hasText)
+                Text(
+                  text,
+                  style: const TextStyle(
+                    color: AegisColors.onSurface,
+                    fontSize: 16,
+                    height: 1.35,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ThinkingBubble extends StatelessWidget {
+  const _ThinkingBubble();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Aegis',
+          style: TextStyle(
+            color: AegisColors.onSurfaceMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
             ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Analysing your report…',
+                style: TextStyle(
+                  color: AegisColors.onSurface,
+                  fontSize: 15,
+                  height: 1.3,
+                ),
+              ),
+            ],
           ),
         ),
       ],

@@ -490,6 +490,7 @@ class LlmService {
       debugPrint('[Aegis][LLM] userPrompt:\n$userPrompt');
     }
 
+    final sessionSw = Stopwatch()..start();
     final session = await model.createSession(
       // Triage outputs are structured JSON, not creative prose. Lower
       // temperature keeps the model from drifting into fields the
@@ -503,8 +504,16 @@ class LlmService {
       enableVisionModality: input.hasImage,
       systemInstruction: systemPrompt,
     );
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] triageStream session created '
+        'createMs=${sessionSw.elapsedMilliseconds} '
+        'audio=${input.hasAudio} image=${input.hasImage}',
+      );
+    }
     final raw = StringBuffer();
     var tokenCount = 0;
+    var firstTokenMs = -1;
     final stopwatch = Stopwatch()..start();
     try {
       // Pick the right Message variant based on what was attached.
@@ -529,12 +538,24 @@ class LlmService {
       } else {
         message = Message.text(text: userPrompt, isUser: true);
       }
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] triageStream addQueryChunk '
+          'kind=${message.runtimeType}',
+        );
+      }
       await session.addQueryChunk(message);
       await for (final token
           in session.getResponseAsync().where((t) => t.isNotEmpty)) {
         if (kDebugMode) {
           tokenCount++;
           raw.write(token);
+          if (firstTokenMs < 0) {
+            firstTokenMs = stopwatch.elapsedMilliseconds;
+            debugPrint(
+              '[Aegis][LLM] triageStream first-token elapsedMs=$firstTokenMs',
+            );
+          }
         }
         yield token;
       }
@@ -568,7 +589,7 @@ class LlmService {
     // genui rules are skipped (the cards' JSON Schemas teach the
     // model the shape from `exampleData`).
     await _skills.load();
-    final skillsLine = _skills.buildSkillsOneLiner();
+    final skillsCatalog = _skills.buildCatalogPrompt();
     final lang = _preferredLanguage;
     final langName = lang == null ? null : _languageNames[lang];
     final speakRule = langName == null
@@ -592,22 +613,50 @@ HOW to emit a surface: send TWO JSON envelopes back-to-back, in fenced
 code blocks, in this exact order. Emitting only `createSurface` shows
 nothing — never do that.
 
-EXAMPLE INPUT  → "I see a building collapsed."
+EXAMPLE INPUT  → "I see a building collapsed." (with photo of rubble)
 EXAMPLE OUTPUT →
 Drafted a damage report. Confirm or edit.
 ```json
 {"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
 ```
 ```json
-{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","children":["d","c"]},{"id":"d","component":"DamageCard","category":2,"fema_scale":"HAZUS_MODERATE","description":"Building collapse reported by user; details pending"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"grade-damage-hazus","children":["d","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Multi-storey concrete building partially collapsed; visible reinforcement bars and dust cloud. Two adjacent walls down, debris fills the street to roughly knee height. Primary structure is unsafe to re-enter."},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
 ```
 
-Cards: DamageCard, CasualtyCard, BeaconMatchCard, ResourceRequestCard,
-ConfirmActionBar, ThinkingTraceDrawer, MapFragment, GoBagChecklist,
-ShelterPreviewCard. Layouts: Column, Row, Text. Root id MUST be "root".
-Always include a ConfirmActionBar.
+Available content cards (pick the one that matches the user's situation):
+* `DamageCard` — physical damage to a structure or asset (collapse, fire,
+  flooding, shaking damage). Requires a HAZUS category and a description.
+* `CasualtyCard` — a person is hurt, trapped, missing, or unreachable.
+  Use this when the user reports being stuck, pinned, bleeding, unable
+  to move, or any injury / entrapment situation.
+* `BeaconMatchCard` — the user's mesh beacon picked up another nearby
+  beacon and we want to surface the match for triage.
+* `ResourceRequestCard` — the user is asking for supplies (water, meds,
+  power, fuel, blankets) or rescue equipment.
+* `ShelterPreviewCard` — show the closest shelter (name, distance, ETA)
+  when the user asks where to go.
+* `MapFragment` — render a small map preview alongside another card.
+* `GoBagChecklist` — emit when the user wants an evacuation checklist.
 
-$skillsLine
+Always pair a content card with a `ConfirmActionBar` so the user can
+confirm or edit. Layouts: Column, Row, Text. Root id MUST be "root".
+Do NOT emit ThinkingTraceDrawer — it is debug-only chrome the host
+renders automatically.
+
+CRITICAL: when an image is attached you MUST actually look at it and
+write a concrete `description` describing what you see — visible
+hazards, injuries, structural state, debris, blood, smoke, occupants
+— NOT a generic placeholder like "details pending". Pick the
+`category` and `fema_scale` from what the image shows, not from the
+text alone.
+
+$skillsCatalog
+On the root Column, set `skill_invoked` to the id of the single best
+matching skill from the list above (or omit when nothing fits).
+Examples: a casualty / trapped / injured person → `intake-survivor-statement`;
+a damage photo → `grade-damage-hazus`; "make a report" / "file it" →
+`generate-ics-209`; "where do I go" / "how do I get out" →
+`plan-evacuation-route`.
 
 Never invent locations or identifiers not in the user's message.
 ''';
@@ -1117,18 +1166,42 @@ Instructions:
     final completer = Completer<void>();
     _loadFuture = completer.future;
     try {
+      final installSw = Stopwatch()..start();
       await _install(pack);
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] _ensureModel install '
+          'pack=${pack.id} ms=${installSw.elapsedMilliseconds}',
+        );
+      }
       await _disposeModel();
+      final modelSw = Stopwatch()..start();
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] _ensureModel getActiveModel begin '
+          'maxTokens=$maxTokens backend=$_preferredBackend',
+        );
+      }
       final model = await FlutterGemma.getActiveModel(
         maxTokens: maxTokens,
         preferredBackend: _preferredBackend,
         supportAudio: true,
         supportImage: true,
       );
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] _ensureModel ready '
+          'ms=${modelSw.elapsedMilliseconds}',
+        );
+      }
       _model = model;
       completer.complete();
       return model;
     } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][LLM] _ensureModel failed: $e');
+        debugPrintStack(stackTrace: st, label: '[Aegis][LLM] _ensureModel stack');
+      }
       completer.completeError(e, st);
       _loadFuture = null;
       rethrow;

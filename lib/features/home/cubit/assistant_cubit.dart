@@ -30,6 +30,7 @@ class ConversationTurn {
     required this.user,
     required this.assistant,
     this.surfaceMessages = const <genui.A2uiMessage>[],
+    this.userImage,
   });
 
   final String user;
@@ -40,6 +41,12 @@ class ConversationTurn {
   /// taps "Action card was shown" to inspect the original UI. Empty
   /// when the turn was a plain text reply.
   final List<genui.A2uiMessage> surfaceMessages;
+
+  /// JPEG bytes of the photo the user attached during intake. Rendered
+  /// as a thumbnail above the user's text bubble in the chat history so
+  /// the conversation reads back like the actual context the model saw.
+  /// Null when the user submitted text-only.
+  final Uint8List? userImage;
 
   bool get hadSurface => surfaceMessages.isNotEmpty;
 
@@ -54,15 +61,17 @@ class ConversationTurn {
       other is ConversationTurn &&
           other.user == user &&
           other.assistant == assistant &&
-          other.surfaceMessages.length == surfaceMessages.length;
+          other.surfaceMessages.length == surfaceMessages.length &&
+          (other.userImage?.length ?? 0) == (userImage?.length ?? 0);
 
   @override
   int get hashCode =>
-      Object.hash(user, assistant, surfaceMessages.length);
+      Object.hash(user, assistant, surfaceMessages.length, userImage?.length);
 
   @override
   String toString() => 'ConversationTurn(user: $user, '
-      'assistant: $assistant, messages: ${surfaceMessages.length})';
+      'assistant: $assistant, messages: ${surfaceMessages.length}, '
+      'imageBytes: ${userImage?.length ?? 0})';
 }
 
 /// Stage of the assistant pipeline. The UI reacts to each one: the mic
@@ -90,6 +99,12 @@ abstract class AssistantState with _$AssistantState {
     @Default(false) bool surfaceReady,
     @Default('') String thinkingTrace,
     String? errorMessage,
+    // JPEG bytes for the photo attached to the in-flight turn. Non-null
+    // only between intake-submit and turn-commit; cleared once the
+    // ConversationTurn has captured the bytes. Drives the user-side
+    // image thumbnail while the LLM is reasoning so the user can see
+    // exactly what context the model is working with.
+    Uint8List? pendingUserImage,
   }) = _AssistantState;
 
   const AssistantState._();
@@ -401,11 +416,17 @@ class AssistantCubit extends Cubit<AssistantState> {
       try {
         await _reports.save(report);
         if (kDebugMode) {
-          debugPrint('[Aegis][Cubit] saved report id=$id');
+          debugPrint(
+            '[Aegis][Cubit] saved report id=$id '
+            'userChars=${_lastUserText.length} '
+            'assistantChars=${_lastAssistantText.length} '
+            'rawChars=${_lastRawLlmOutput.length}',
+          );
         }
-      } on Object catch (e) {
+      } on Object catch (e, st) {
         if (kDebugMode) {
           debugPrint('[Aegis][Cubit] save report failed: $e');
+          debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] save stack');
         }
       }
     }
@@ -664,9 +685,10 @@ class AssistantCubit extends Cubit<AssistantState> {
       if (event is genui.A2uiMessageEvent) {
         capturedMessages.add(event.message);
         if (kDebugMode) {
+          final summary = _summariseA2uiMessage(event.message);
           debugPrint(
             '[Aegis][Cubit] genui message #${capturedMessages.length} '
-            'type=${event.message.runtimeType}',
+            'type=${event.message.runtimeType} $summary',
           );
         }
         _surfaceController.handleMessage(event.message);
@@ -693,11 +715,22 @@ class AssistantCubit extends Cubit<AssistantState> {
     });
 
     _surfaceUpdatesSub = _surfaceController.surfaceUpdates.listen((evt) {
+      // Only flip `surfaceReady` once the surface actually has a
+      // renderable root. genui's `CreateSurface` envelope keeps the
+      // previous component map intact (it only mutates `catalogId` /
+      // `theme`), so an early flip would render the *previous* surface
+      // — typically the still-mounted intake card — until the model's
+      // `UpdateComponents` finally arrives. The user can then re-tap
+      // "Analyse with Aegis", cancelling the in-flight stream and
+      // forcing a new round-trip.
+      final renderable = _hasRenderableSurface();
       if (kDebugMode) {
         debugPrint(
-          '[Aegis][Cubit] surfaceUpdate ${evt.runtimeType}',
+          '[Aegis][Cubit] surfaceUpdate ${evt.runtimeType} '
+          'renderable=$renderable',
         );
       }
+      if (!renderable) return;
       if (state.surfaceReady) return;
       sawSurface = true;
       emit(state.copyWith(surfaceReady: true));
@@ -710,6 +743,16 @@ class AssistantCubit extends Cubit<AssistantState> {
     final rawBuffer = StringBuffer();
 
     final completer = Completer<void>();
+    final streamSw = Stopwatch()..start();
+    var firstTokenMs = -1;
+    var rawTokenCount = 0;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] triageStream subscribe '
+        'imageBytes=${intakeImage?.length ?? 0} '
+        'historyLines=${history.length}',
+      );
+    }
     _llmSub = _llm
         .triageStream(TriageInput(
           userText: transcript,
@@ -718,10 +761,29 @@ class AssistantCubit extends Cubit<AssistantState> {
         ))
         .listen(
       (chunk) {
+        if (kDebugMode) {
+          rawTokenCount++;
+          if (firstTokenMs < 0) {
+            firstTokenMs = streamSw.elapsedMilliseconds;
+            debugPrint(
+              '[Aegis][Cubit] triageStream first-token '
+              'elapsedMs=$firstTokenMs '
+              'firstChunk=${jsonEncode(chunk.length > 80 ? "${chunk.substring(0, 80)}…" : chunk)}',
+            );
+          }
+        }
         rawBuffer.write(chunk);
         parserInput.add(chunk);
       },
       onDone: () async {
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][Cubit] triageStream onDone '
+            'rawTokens=$rawTokenCount '
+            'rawChars=${rawBuffer.length} '
+            'elapsedMs=${streamSw.elapsedMilliseconds}',
+          );
+        }
         try {
           await parserInput.close();
           // Wait for the parser to drain whatever it had buffered.
@@ -732,6 +794,21 @@ class AssistantCubit extends Cubit<AssistantState> {
         if (!completer.isCompleted) completer.complete();
       },
       onError: (Object e, StackTrace st) {
+        if (kDebugMode) {
+          final preview = rawBuffer.toString();
+          final clipped = preview.length > 400
+              ? '${preview.substring(0, 400)}…'
+              : preview;
+          debugPrint(
+            '[Aegis][Cubit] triageStream onError '
+            'rawTokens=$rawTokenCount '
+            'rawChars=${rawBuffer.length} '
+            'elapsedMs=${streamSw.elapsedMilliseconds} '
+            'error=$e',
+          );
+          debugPrint('[Aegis][Cubit] triageStream rawSoFar:\n$clipped');
+          debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] triageStream stack');
+        }
         if (!completer.isCompleted) completer.completeError(e, st);
       },
       cancelOnError: true,
@@ -748,14 +825,22 @@ class AssistantCubit extends Cubit<AssistantState> {
       // user doesn't see an empty card.
       final usableSurface = sawSurface && _hasRenderableSurface();
       if (kDebugMode) {
+        final componentTypes = _surfaceComponentTypes();
         debugPrint(
           '[Aegis][Cubit] _respondTo stream done '
           'sawSurface=$sawSurface '
           'usableSurface=$usableSurface '
           'a2uiMessages=${capturedMessages.length} '
+          'surfaceComponents=${componentTypes.length} '
+          '[${componentTypes.join(",")}] '
           'textChunks=$textChunkCount textChars=$textCharCount '
           'spokeAtLeastOne=$spokeAtLeastOne',
         );
+        final preview = rawBuffer.toString();
+        final clipped = preview.length > 800
+            ? '${preview.substring(0, 800)}…'
+            : preview;
+        debugPrint('[Aegis][Cubit] rawOutput:\n$clipped');
       }
       if (spokeAtLeastOne) {
         await _tts.whenIdle;
@@ -771,6 +856,7 @@ class AssistantCubit extends Cubit<AssistantState> {
       final committed = ConversationTurn(
         user: transcript.trim(),
         assistant: assistantText,
+        userImage: intakeImage ?? state.pendingUserImage,
         surfaceMessages: usableSurface
             ? List.unmodifiable(capturedMessages)
             : const <genui.A2uiMessage>[],
@@ -783,6 +869,7 @@ class AssistantCubit extends Cubit<AssistantState> {
         transcript: '',
         response: '',
         thinkingTrace: assistantText,
+        pendingUserImage: null,
       ));
 
       // If the agent emitted a usable surface, pause for verification.
@@ -813,14 +900,30 @@ class AssistantCubit extends Cubit<AssistantState> {
           );
         }
       }
-    } on Object catch (e) {
+    } on Object catch (e, st) {
       if (kDebugMode) {
-        debugPrint('[Aegis][Cubit] _respondTo failed: $e');
+        final preview = rawBuffer.toString();
+        final clipped = preview.length > 800
+            ? '${preview.substring(0, 800)}…'
+            : preview;
+        debugPrint(
+          '[Aegis][Cubit] _respondTo failed '
+          'rawTokens=$rawTokenCount '
+          'rawChars=${rawBuffer.length} '
+          'capturedMessages=${capturedMessages.length} '
+          'sawSurface=$sawSurface '
+          'error=$e',
+        );
+        if (preview.isNotEmpty) {
+          debugPrint('[Aegis][Cubit] _respondTo rawSoFar:\n$clipped');
+        }
+        debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] _respondTo stack');
       }
       if (_conversationActive) {
         emit(state.copyWith(
           stage: AssistantStage.error,
           errorMessage: e.toString(),
+          pendingUserImage: null,
         ));
         _conversationActive = false;
       }
@@ -995,11 +1098,34 @@ class AssistantCubit extends Cubit<AssistantState> {
     // Drop surfaceReady so the view flips from intake card → "Aegis is
     // reasoning…" spinner. The LLM's createSurface envelope will
     // overwrite the surface registry entry by id, and surfaceReady
-    // flips back to true once it lands.
-    emit(state.copyWith(surfaceReady: false));
+    // flips back to true once it lands. Also stash the user's input
+    // (text + image bytes) on the state so the chat shows the user
+    // bubble immediately — without it the screen sits blank for the
+    // 15-30s the engine spends on prefill + first token.
+    final visibleUserText =
+        text.isEmpty ? '(see attached evidence)' : text;
+    emit(state.copyWith(
+      surfaceReady: false,
+      transcript: visibleUserText,
+      pendingUserImage: _pendingImageJpeg,
+    ));
+    // Wipe the existing surface so the still-mounted TriageIntakeCard
+    // disappears the moment the user taps "Analyse with Aegis". Without
+    // this the card hangs around between the cubit's `surfaceReady=false`
+    // emit and the model's first `UpdateComponents` envelope (15-90s
+    // later), and a panicky re-tap of the still-active button cancels
+    // the in-flight stream and forces another round-trip. genui's
+    // `CreateSurface` envelope only mutates `catalogId`/`theme`, so we
+    // need an explicit `DeleteSurface` to clear the component map.
+    _surfaceController.handleMessage(
+      genui.A2uiMessage.fromJson(<String, Object?>{
+        'version': 'v0.9',
+        'deleteSurface': <String, Object?>{'surfaceId': surfaceId},
+      }),
+    );
     _conversationActive = true;
     await _respondTo(
-      text.isEmpty ? '(see attached evidence)' : text,
+      visibleUserText,
       intakeImage: _pendingImageJpeg,
     );
     _conversationActive = false;
@@ -1049,6 +1175,40 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
     }
     return null;
+  }
+
+  static String _summariseA2uiMessage(genui.A2uiMessage msg) {
+    if (msg is genui.CreateSurface) {
+      return 'surfaceId=${msg.surfaceId} catalog=${msg.catalogId}';
+    }
+    if (msg is genui.UpdateComponents) {
+      final ids = msg.components
+          .map((c) => '${c.id}:${c.type}')
+          .take(8)
+          .join(',');
+      final more =
+          msg.components.length > 8 ? '+${msg.components.length - 8}' : '';
+      return 'surfaceId=${msg.surfaceId} count=${msg.components.length} '
+          '[$ids$more]';
+    }
+    if (msg is genui.UpdateDataModel) {
+      return 'surfaceId=${msg.surfaceId} path=${msg.path}';
+    }
+    if (msg is genui.DeleteSurface) {
+      return 'surfaceId=${msg.surfaceId}';
+    }
+    return '';
+  }
+
+  List<String> _surfaceComponentTypes() {
+    try {
+      final ctx = _surfaceController.contextFor(surfaceId);
+      final def = ctx.definition.value;
+      if (def == null) return const <String>[];
+      return def.components.values.map((c) => '${c.id}:${c.type}').toList();
+    } on Object {
+      return const <String>[];
+    }
   }
 
   /// True when the live surface has at least a root component — ie.

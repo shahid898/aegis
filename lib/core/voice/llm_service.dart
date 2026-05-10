@@ -644,28 +644,21 @@ class LlmService {
     var firstTokenMs = -1;
     final stopwatch = Stopwatch()..start();
     try {
-      // Pick the right Message variant based on what was attached.
-      // Audio takes precedence (we have a dedicated transcribe path
-      // for audio-only intake) — image rides alongside text. The
-      // 1024-token bundle ignores image bytes today, but we still
-      // pass them so a future bundle with vision can pick them up
-      // without changing the call sites.
-      final Message message;
-      if (input.hasAudio) {
-        message = Message.withAudio(
-          text: userPrompt,
-          audioBytes: input.audioWav!,
-          isUser: true,
-        );
-      } else if (input.hasImage) {
-        message = Message.withImage(
-          text: userPrompt,
-          imageBytes: input.imageJpeg!,
-          isUser: true,
-        );
-      } else {
-        message = Message.text(text: userPrompt, isUser: true);
-      }
+      // Pack every attached modality into a single `Message`. The
+      // factory constructors `Message.withAudio` / `Message.withImage`
+      // each only set one field, so when the responder records both
+      // a photo AND a voice note we have to use the raw `Message`
+      // constructor to send both bytes streams together. Gemma 4's
+      // multimodal session created with `enableAudioModality=true`
+      // AND `enableVisionModality=true` consumes them in one
+      // forward pass and the model reasons about audio + image
+      // jointly.
+      final Message message = Message(
+        text: userPrompt,
+        isUser: true,
+        imageBytes: input.hasImage ? input.imageJpeg : null,
+        audioBytes: input.hasAudio ? input.audioWav : null,
+      );
       if (kDebugMode) {
         debugPrint(
           '[Aegis][LLM] triageStream addQueryChunk '

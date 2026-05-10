@@ -1202,6 +1202,13 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
 
     if (wav == null || wav.isEmpty) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] intake voice attach FAILED — '
+          'wav=${wav == null ? "null" : "empty"} '
+          '(VAD found no speech segments above threshold 0.5)',
+        );
+      }
       _intakeStubRequested.add('Did not catch any speech. Try again.');
       emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
       _renderIntakeCard();

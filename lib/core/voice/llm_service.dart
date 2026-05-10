@@ -731,6 +731,12 @@ class LlmService {
     // model the shape from `exampleData`).
     await _skills.load();
     final skillsCatalog = _skills.buildCatalogPrompt();
+    // Triage path always emits a report, so the disaster-report-generator
+    // skill's full body (format templates, field rules) is the only one
+    // the model needs at chat-creation time. Capped at ~3 KB to keep
+    // total prompt under ~1700 tokens with image+audio prefill room.
+    final reportSkillBody =
+        _skills.buildSkillBodyExcerpt('disaster-report-generator');
     final lang = _preferredLanguage;
     final langName = lang == null ? null : _languageNames[lang];
     final speakRule = langName == null
@@ -818,6 +824,13 @@ Field-fill rules:
   best-effort value PLUS optional `[INFERRED]` annotation.
 
 Never invent locations or identifiers not in the user's message.
+
+---
+DISASTER-REPORT-GENERATOR SKILL BODY (authoritative reference for the
+report you emit — follow these format templates and field rules
+verbatim):
+
+$reportSkillBody
 ''';
   }
 

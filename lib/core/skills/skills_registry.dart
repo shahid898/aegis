@@ -90,6 +90,32 @@ class SkillsRegistry {
     return buf.toString();
   }
 
+  /// Returns the body of a single SKILL.md, truncated to [maxChars]
+  /// (default ~3 KB ≈ 750 tokens) so the registry can inject the
+  /// skill's actual instructions into the system prompt without
+  /// blowing Gemma 4's context budget.
+  ///
+  /// The catalog ([buildCatalogPrompt]) only carries the id +
+  /// description from each SKILL.md — that's enough for the model to
+  /// PICK a skill, but not to FOLLOW its instructions. For the
+  /// `disaster-report-generator` skill specifically, picking is
+  /// useless without the format templates and field-fill rules in
+  /// the body. This getter lets the prompt builder paste a bounded
+  /// excerpt under the relevant skill id at chat-creation time.
+  ///
+  /// Truncation prefers section-aligned cuts (`\n## `) so the
+  /// excerpt ends on a clean heading boundary; falls back to a hard
+  /// char cut if no section break is found.
+  String buildSkillBodyExcerpt(String id, {int maxChars = 3000}) {
+    final skill = byId(id);
+    if (skill == null || skill.body.isEmpty) return '';
+    final body = skill.body;
+    if (body.length <= maxChars) return body;
+    final cutAt = body.lastIndexOf('\n## ', maxChars);
+    final endIdx = cutAt > maxChars ~/ 2 ? cutAt : maxChars;
+    return '${body.substring(0, endIdx).trimRight()}\n…[skill body truncated]';
+  }
+
   /// Single-line list of skill ids — used when the system-prompt
   /// budget is tight. Drops every description except the id, leaving
   /// the model with a discoverable vocabulary but no per-skill prose.

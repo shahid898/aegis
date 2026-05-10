@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -7,6 +8,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:genui/genui.dart' as genui;
 import 'package:geolocator/geolocator.dart';
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
@@ -34,23 +36,31 @@ part 'assistant_cubit.freezed.dart';
 /// breaks.
 @immutable
 class AssistantEvidenceSnapshot {
-  const AssistantEvidenceSnapshot({this.image, this.text = ''});
+  const AssistantEvidenceSnapshot({
+    this.image,
+    this.audio,
+    this.text = '',
+  });
 
   final Uint8List? image;
+  final Uint8List? audio;
   final String text;
 
   bool get isEmpty =>
-      (image == null || image!.isEmpty) && text.trim().isEmpty;
+      (image == null || image!.isEmpty) &&
+      (audio == null || audio!.isEmpty) &&
+      text.trim().isEmpty;
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is AssistantEvidenceSnapshot &&
           other.text == text &&
-          (other.image?.length ?? 0) == (image?.length ?? 0);
+          (other.image?.length ?? 0) == (image?.length ?? 0) &&
+          (other.audio?.length ?? 0) == (audio?.length ?? 0);
 
   @override
-  int get hashCode => Object.hash(text, image?.length);
+  int get hashCode => Object.hash(text, image?.length, audio?.length);
 }
 
 @immutable
@@ -60,10 +70,16 @@ class ConversationTurn {
     required this.assistant,
     this.surfaceMessages = const <genui.A2uiMessage>[],
     this.userImage,
+    this.userAudio,
   });
 
   final String user;
   final String assistant;
+
+  /// WAV bytes (mono 16 kHz IEEE-float32) of the voice intake the user
+  /// attached to this turn. Replayed inside the IncidentReportCard's
+  /// evidence block so the responder can hear the original recording.
+  final Uint8List? userAudio;
 
   /// Frozen snapshot of the A2UI messages the agent emitted on this
   /// turn — replayed into a private SurfaceController when the user
@@ -134,6 +150,7 @@ abstract class AssistantState with _$AssistantState {
     // image thumbnail while the LLM is reasoning so the user can see
     // exactly what context the model is working with.
     Uint8List? pendingUserImage,
+    Uint8List? pendingUserAudio,
   }) = _AssistantState;
 
   const AssistantState._();
@@ -246,11 +263,14 @@ class AssistantCubit extends Cubit<AssistantState> {
   bool _pendingHasPhoto = false;
   bool _pendingHasAudio = false;
   Uint8List? _pendingImageJpeg;
+  Uint8List? _pendingAudioWav;
   // Raw LLM output for the most recent generating turn — captured in
   // [_respondTo] and consumed by [confirmSurface] when persisting the
   // confirmed surface to [ReportsRepository]. Reset on every new turn.
   String _lastRawLlmOutput = '';
   String _lastUserText = '';
+  Uint8List? _lastUserImage;
+  Uint8List? _lastUserAudio;
   String _lastAssistantText = '';
 
   late final genui.SurfaceController _surfaceController;
@@ -450,12 +470,24 @@ class AssistantCubit extends Cubit<AssistantState> {
     // triage, not the act of saving one).
     if (_lastRawLlmOutput.isNotEmpty) {
       final id = DateTime.now().toIso8601String();
+      // Spill the captured image / voice note to the app's documents
+      // directory so the report survives app restarts. Hive stores
+      // only the path — opening the report detail loads bytes
+      // lazily. File names are scoped by report id so a future
+      // delete-report flow can rm the directory wholesale.
+      final attachments = await _persistAttachments(
+        id: id,
+        image: _lastUserImage,
+        audio: _lastUserAudio,
+      );
       final report = Report(
         id: id,
         userText: _lastUserText,
         assistantText: _lastAssistantText,
         createdAt: DateTime.now(),
         rawLlmOutput: _lastRawLlmOutput,
+        imagePath: attachments.imagePath,
+        audioPath: attachments.audioPath,
       );
       try {
         await _reports.save(report);
@@ -464,7 +496,9 @@ class AssistantCubit extends Cubit<AssistantState> {
             '[Aegis][Cubit] saved report id=$id '
             'userChars=${_lastUserText.length} '
             'assistantChars=${_lastAssistantText.length} '
-            'rawChars=${_lastRawLlmOutput.length}',
+            'rawChars=${_lastRawLlmOutput.length} '
+            'image=${attachments.imagePath ?? "-"} '
+            'audio=${attachments.audioPath ?? "-"}',
           );
         }
       } on Object catch (e, st) {
@@ -642,6 +676,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     String transcript, {
     List<String> extraIncidentLog = const <String>[],
     Uint8List? intakeImage,
+    Uint8List? intakeAudioWav,
   }) async {
     emit(state.copyWith(
       stage: AssistantStage.thinking,
@@ -803,6 +838,7 @@ class AssistantCubit extends Cubit<AssistantState> {
           userText: transcript,
           incidentLog: history,
           imageJpeg: intakeImage,
+          audioWav: intakeAudioWav,
           gpsContext: gpsContext,
         ))
         .listen(
@@ -897,12 +933,22 @@ class AssistantCubit extends Cubit<AssistantState> {
       // Cleared on the next [_respondTo] turn so we don't accidentally
       // re-save the previous one.
       _lastRawLlmOutput = usableSurface ? rawBuffer.toString() : '';
-      _lastUserText = transcript.trim();
+      // Drop the "(see attached evidence)" placeholder we feed the
+      // LLM when the user submits only attachments — it's
+      // model-prompt scaffolding, not something the user typed, so
+      // it shouldn't end up in the chat bubble or persisted report.
+      const placeholder = '(see attached evidence)';
+      final committedUserText =
+          transcript.trim() == placeholder ? '' : transcript.trim();
+      _lastUserText = committedUserText;
       _lastAssistantText = assistantText;
+      _lastUserImage = intakeImage ?? state.pendingUserImage;
+      _lastUserAudio = intakeAudioWav;
       final committed = ConversationTurn(
-        user: transcript.trim(),
+        user: committedUserText,
         assistant: assistantText,
         userImage: intakeImage ?? state.pendingUserImage,
+        userAudio: intakeAudioWav,
         surfaceMessages: usableSurface
             ? List.unmodifiable(capturedMessages)
             : const <genui.A2uiMessage>[],
@@ -916,9 +962,11 @@ class AssistantCubit extends Cubit<AssistantState> {
         response: '',
         thinkingTrace: assistantText,
         pendingUserImage: null,
+        pendingUserAudio: null,
       ));
       AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
         image: committed.userImage,
+        audio: committed.userAudio,
         text: committed.user,
       );
 
@@ -974,6 +1022,7 @@ class AssistantCubit extends Cubit<AssistantState> {
           stage: AssistantStage.error,
           errorMessage: e.toString(),
           pendingUserImage: null,
+          pendingUserAudio: null,
         ));
         _conversationActive = false;
       }
@@ -1095,38 +1144,75 @@ class AssistantCubit extends Cubit<AssistantState> {
       _intakeStubRequested.add('Voice models are not ready yet.');
       return;
     }
-    // Temporarily flip _conversationActive so [_captureUtterance]'s
-    // listening state-emit survives the mic→STT round trip. Restore
-    // afterwards so the listen loop doesn't keep firing.
-    final wasActive = _conversationActive;
-    _conversationActive = true;
-    String? captured;
-    try {
-      captured = await _captureUtterance();
-    } on Object catch (e) {
-      if (kDebugMode) {
-        debugPrint('[Aegis][Cubit] intake voice capture failed: $e');
+    if (!_recorder.isOpen) {
+      try {
+        await _recorder.open();
+      } on MicrophonePermissionException {
+        _intakeStubRequested.add(
+          'Microphone permission is required for voice intake.',
+        );
+        return;
+      } on Object catch (e) {
+        if (kDebugMode) {
+          debugPrint('[Aegis][Cubit] intake recorder open failed: $e');
+        }
+        _intakeStubRequested.add('Could not open microphone.');
+        return;
       }
-      captured = null;
-    } finally {
-      _conversationActive = wasActive;
     }
 
-    if (captured == null || captured.trim().isEmpty) {
+    Stream<Float32List> audioStream;
+    try {
+      audioStream = await _recorder.startStream();
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] intake recorder start failed: $e');
+      }
+      _intakeStubRequested.add('Could not start recording.');
+      return;
+    }
+
+    emit(state.copyWith(stage: AssistantStage.listening));
+
+    Uint8List? wav;
+    try {
+      // 30s safety cap so a stuck VAD never hangs the intake. The
+      // real endpoint is the trailing-silence timer inside
+      // [SttService.recordToWav] (~1.2 s after the last detected
+      // speech sample), so this only fires when the mic streams
+      // pure noise / the user forgets to stop.
+      wav = await _stt
+          .recordToWav(audioStream)
+          .timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] intake voice capture timed out');
+      }
+    } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] intake voice capture failed: $e');
+        debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] intake stack');
+      }
+    } finally {
+      try {
+        await _recorder.cancel();
+      } on Object {
+        // best-effort
+      }
+    }
+
+    if (wav == null || wav.isEmpty) {
       _intakeStubRequested.add('Did not catch any speech. Try again.');
-      // Repaint the intake card so the user sees the listening UX
-      // tear down cleanly.
       emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
       _renderIntakeCard();
       return;
     }
-    final clean = captured.trim();
-    final existing = _pendingIntakeText.trim();
-    _pendingIntakeText = existing.isEmpty ? clean : '$existing $clean';
+
+    _pendingAudioWav = wav;
     _pendingHasAudio = true;
     if (kDebugMode) {
       debugPrint(
-        '[Aegis][Cubit] intake voice attached chars=${clean.length}',
+        '[Aegis][Cubit] intake voice attached wavBytes=${wav.length}',
       );
     }
     emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
@@ -1136,10 +1222,10 @@ class AssistantCubit extends Cubit<AssistantState> {
   Future<void> _onIntakeSubmit() async {
     final text = _pendingIntakeText.trim();
     final hasImage = _pendingImageJpeg != null;
-    // Need at least one signal — empty text + no image isn't
-    // analysable. Audio-only is captured as text via STT, so it
-    // shows up in the text field.
-    if (text.isEmpty && !hasImage) {
+    final hasAudio = _pendingAudioWav != null && _pendingAudioWav!.isNotEmpty;
+    // Need at least one signal — empty text, no image, no audio isn't
+    // analysable.
+    if (text.isEmpty && !hasImage && !hasAudio) {
       _intakeStubRequested.add(
         'Add a description, photo, or voice note before analysing.',
       );
@@ -1151,17 +1237,23 @@ class AssistantCubit extends Cubit<AssistantState> {
     // flips back to true once it lands. Also stash the user's input
     // (text + image bytes) on the state so the chat shows the user
     // bubble immediately — without it the screen sits blank for the
-    // 15-30s the engine spends on prefill + first token.
-    final visibleUserText =
+    // 15-30s the engine spends on prefill + first token. When the
+    // user submitted only attachments, leave the transcript bubble
+    // empty — the image / audio chips carry the message; a "(see
+    // attached evidence)" placeholder reads like noise. The LLM
+    // still gets that hint via the user prompt builder.
+    final llmUserText =
         text.isEmpty ? '(see attached evidence)' : text;
     emit(state.copyWith(
       surfaceReady: false,
-      transcript: visibleUserText,
+      transcript: text,
       pendingUserImage: _pendingImageJpeg,
+      pendingUserAudio: _pendingAudioWav,
     ));
     AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
       image: _pendingImageJpeg,
-      text: visibleUserText,
+      audio: _pendingAudioWav,
+      text: text,
     );
     // Wipe the existing surface so the still-mounted TriageIntakeCard
     // disappears the moment the user taps "Analyse with Aegis". Without
@@ -1179,12 +1271,14 @@ class AssistantCubit extends Cubit<AssistantState> {
     );
     _conversationActive = true;
     await _respondTo(
-      visibleUserText,
+      llmUserText,
       intakeImage: _pendingImageJpeg,
+      intakeAudioWav: _pendingAudioWav,
     );
     _conversationActive = false;
     // Drop the captured bytes — they're already in the LLM context.
     _pendingImageJpeg = null;
+    _pendingAudioWav = null;
     _pendingHasPhoto = false;
     _pendingHasAudio = false;
     _pendingIntakeText = '';
@@ -1260,6 +1354,50 @@ class AssistantCubit extends Cubit<AssistantState> {
   /// fails; the LLM treats the field as optional and still emits a
   /// report (just with `[UNKNOWN]` for location). Never asks for
   /// permission here — onboarding's permissions step owns that flow.
+  /// Writes intake image + audio bytes to the app's documents
+  /// directory, keyed by [id], so the persisted [Report] can
+  /// reference them by path. Returns a record with the absolute
+  /// paths (or null per field when nothing was attached). Best-effort:
+  /// a write failure simply produces a null path so the report still
+  /// saves with whatever attachments survived.
+  Future<({String? imagePath, String? audioPath})> _persistAttachments({
+    required String id,
+    Uint8List? image,
+    Uint8List? audio,
+  }) async {
+    if ((image == null || image.isEmpty) &&
+        (audio == null || audio.isEmpty)) {
+      return (imagePath: null, audioPath: null);
+    }
+    String? imagePath;
+    String? audioPath;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      // Sanitise the report id (which may be an ISO timestamp with
+      // colons) so it's a safe directory name on every filesystem.
+      final safeId = id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final dir = Directory('${docs.path}/aegis-reports/$safeId');
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      if (image != null && image.isNotEmpty) {
+        final f = File('${dir.path}/photo.jpg');
+        await f.writeAsBytes(image, flush: true);
+        imagePath = f.path;
+      }
+      if (audio != null && audio.isNotEmpty) {
+        final f = File('${dir.path}/voice.wav');
+        await f.writeAsBytes(audio, flush: true);
+        audioPath = f.path;
+      }
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] _persistAttachments failed: $e');
+      }
+    }
+    return (imagePath: imagePath, audioPath: audioPath);
+  }
+
   Future<String?> _resolveGpsContext() async {
     try {
       final serviceOn = await Geolocator.isLocationServiceEnabled();

@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:genui/genui.dart' as genui;
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
+import '../../home/cubit/assistant_cubit.dart';
 import '../../home/widgets/aegis_catalog.dart';
 import '../data/report.dart';
 import '../data/reports_repository.dart';
@@ -197,6 +200,16 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
   }
 
   Future<void> _replay() async {
+    // Re-publish the report's saved attachments to the global
+    // evidence sink BEFORE the IncidentReportCard mounts. The card's
+    // `_EvidenceBlock` reads from `AssistantCubit.evidenceSink` (a
+    // top-level ValueNotifier — see AssistantCubit for why we don't
+    // use a BlocProvider here), and that sink is in-memory only,
+    // empty after a hot-restart. Loading the persisted bytes here
+    // means opening a saved report repopulates the image + voice
+    // chips identically to the moment it was confirmed.
+    await _hydrateEvidenceFromReport();
+
     final input = StreamController<String>();
     _input = input;
     final textBuffer = StringBuffer();
@@ -219,6 +232,35 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
     if (mounted) {
       setState(() => _replayedText = textBuffer.toString().trim());
     }
+  }
+
+  Future<void> _hydrateEvidenceFromReport() async {
+    final r = widget.report;
+    Uint8List? image;
+    Uint8List? audio;
+    final imagePath = r.imagePath;
+    final audioPath = r.audioPath;
+    try {
+      if (imagePath != null && imagePath.isNotEmpty) {
+        final f = File(imagePath);
+        if (await f.exists()) image = await f.readAsBytes();
+      }
+    } on Object catch (e) {
+      debugPrint('[Aegis][ReportDetail] image load failed: $e');
+    }
+    try {
+      if (audioPath != null && audioPath.isNotEmpty) {
+        final f = File(audioPath);
+        if (await f.exists()) audio = await f.readAsBytes();
+      }
+    } on Object catch (e) {
+      debugPrint('[Aegis][ReportDetail] audio load failed: $e');
+    }
+    AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
+      image: image,
+      audio: audio,
+      text: r.userText,
+    );
   }
 
   @override

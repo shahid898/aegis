@@ -10,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router.dart';
+import '../widgets/aegis_catalog.dart';
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/storage_service.dart';
@@ -348,6 +349,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
         hasResponse ||
         hasSurface ||
         (state.pendingUserImage?.isNotEmpty ?? false) ||
+        (state.pendingUserAudio?.isNotEmpty ?? false) ||
         state.stage == AssistantStage.thinking;
 
     if (!hasInflight && !hasHistory) {
@@ -384,6 +386,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   align: CrossAxisAlignment.end,
                   background: AegisColors.primary.withValues(alpha: 0.10),
                   image: turn.userImage,
+                  audio: turn.userAudio,
                 ),
                 const SizedBox(height: 12),
                 _Bubble(
@@ -404,7 +407,8 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
         // In-flight turn: streaming transcript, partial response, and/or
         // a live A2UI surface. The agent may emit any subset.
         final hasPendingImage = (state.pendingUserImage?.isNotEmpty ?? false);
-        final showUser = hasTranscript || hasPendingImage;
+        final hasPendingAudio = (state.pendingUserAudio?.isNotEmpty ?? false);
+        final showUser = hasTranscript || hasPendingImage || hasPendingAudio;
         final showThinking = state.stage == AssistantStage.thinking &&
             !hasResponse &&
             !hasSurface;
@@ -420,6 +424,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   align: CrossAxisAlignment.end,
                   background: AegisColors.primary.withValues(alpha: 0.10),
                   image: state.pendingUserImage,
+                  audio: state.pendingUserAudio,
                 ),
               if (showThinking) ...[
                 if (showUser) const SizedBox(height: 12),
@@ -725,6 +730,7 @@ class _Bubble extends StatelessWidget {
     required this.align,
     required this.background,
     this.image,
+    this.audio,
   });
 
   final String label;
@@ -732,11 +738,16 @@ class _Bubble extends StatelessWidget {
   final CrossAxisAlignment align;
   final Color background;
   final Uint8List? image;
+  final Uint8List? audio;
 
   @override
   Widget build(BuildContext context) {
     final hasText = text.isNotEmpty;
     final hasImage = image != null && image!.isNotEmpty;
+    final hasAudio = audio != null && audio!.isNotEmpty;
+    if (!hasText && !hasImage && !hasAudio) {
+      return const SizedBox.shrink();
+    }
     return Column(
       crossAxisAlignment: align,
       children: [
@@ -773,7 +784,14 @@ class _Bubble extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (hasImage && hasText) const SizedBox(height: 8),
+              if (hasImage && (hasAudio || hasText))
+                const SizedBox(height: 8),
+              if (hasAudio)
+                AegisAudioChip(
+                  key: ValueKey(audio!.length),
+                  wavBytes: audio!,
+                ),
+              if (hasAudio && hasText) const SizedBox(height: 8),
               if (hasText)
                 Text(
                   text,

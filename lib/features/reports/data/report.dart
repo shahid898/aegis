@@ -21,6 +21,8 @@ class Report {
     required this.createdAt,
     required this.rawLlmOutput,
     this.gpsContext,
+    this.imagePath,
+    this.audioPath,
   });
 
   /// Unique id — also the Hive key. We use ISO timestamps as ids so
@@ -51,6 +53,16 @@ class Report {
   /// without permission; when set, surfaced as a one-line subtitle.
   final String? gpsContext;
 
+  /// Absolute path on the app's documents directory to the JPEG the
+  /// responder attached to this report. Null when no photo was
+  /// captured. Bytes are loaded lazily on the report detail page so
+  /// the reports list itself doesn't have to read every photo.
+  final String? imagePath;
+
+  /// Absolute path to the WAV the responder recorded during voice
+  /// intake. Same lifecycle and lazy-load story as [imagePath].
+  final String? audioPath;
+
   Map<String, Object?> toJson() => <String, Object?>{
         'id': id,
         'userText': userText,
@@ -58,6 +70,8 @@ class Report {
         'createdAt': createdAt.toIso8601String(),
         'rawLlmOutput': rawLlmOutput,
         if (gpsContext != null) 'gpsContext': gpsContext,
+        if (imagePath != null) 'imagePath': imagePath,
+        if (audioPath != null) 'audioPath': audioPath,
       };
 
   factory Report.fromJson(Map<String, Object?> json) {
@@ -68,6 +82,8 @@ class Report {
       createdAt: DateTime.parse(json['createdAt'] as String),
       rawLlmOutput: (json['rawLlmOutput'] as String?) ?? '',
       gpsContext: json['gpsContext'] as String?,
+      imagePath: json['imagePath'] as String?,
+      audioPath: json['audioPath'] as String?,
     );
   }
 }

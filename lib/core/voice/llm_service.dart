@@ -453,19 +453,23 @@ class LlmService {
   ///     surfaced via [TriageInput.incidentLog]. The agent reads the
   ///     log as part of the system prompt at every turn — no
   ///     conversational state has to survive between sessions.
-  // Triage budget at 6144 because the bundled Gemma 4 E2B model
+  // Triage budget at 8192 because the bundled Gemma 4 E2B model
   // treats `max_tokens` as the engine's *total* context (input +
-  // image patches + output), not just decode room. The vision
-  // preprocessor resizes any photo up to ~768x768 = 2304 patches to
-  // hit the model's `max_num_patches: 2520` ceiling, regardless of
-  // the source image size. With the compressed system prompt
-  // (~750 tok) and a typical user line (<20 tok), 6144 leaves
-  // ~3000 tokens of decode room — enough headroom for both JSON
-  // envelopes plus a multi-sentence description even if the model
-  // wanders. Engine memory cost scales linearly with max_tokens;
-  // arm64 mid-range devices (Pixel 7 / Galaxy S20+) handle 6144
-  // with ~150MB extra heap. Drop to 4096 if cold-start ms regresses.
-  Stream<String> triageStream(TriageInput input, {int maxTokens = 6144}) async* {
+  // image patches + audio frames + output), not just decode room.
+  // Per-modality prefill cost on this build:
+  //   - Vision: ~2304 tokens (engine upscales any photo to ~768x768
+  //             to hit the `max_num_patches: 2520` ceiling).
+  //   - Audio:  up to ~3000 tokens for an 8 s VAD-capped clip
+  //             (audio_encoder + adapter shrink factor 4).
+  //   - System prompt: ~750 tokens (compressed catalog + skill list).
+  //   - User line + GPS + timestamp: ~30 tokens.
+  // 8192 leaves at least ~2000 decode tokens with image+audio both
+  // attached — enough for both envelopes plus a filled
+  // `IncidentReportCard` body. The OOM fallback in [triageStream]
+  // catches devices that can't hold 8192 in heap and drops to 4096.
+  // Cold-start scales linearly with max_tokens, so capable phones
+  // pay ~30 s on first turn after app launch.
+  Stream<String> triageStream(TriageInput input, {int maxTokens = 8192}) async* {
     try {
       yield* _triageStreamOnce(input, maxTokens: maxTokens);
     } on Object catch (e) {
@@ -485,6 +489,73 @@ class LlmService {
         return;
       }
       rethrow;
+    }
+  }
+
+  /// Strips Gemma 4's `<|channel>thought\n…<channel|>` reasoning blocks
+  /// out of a streaming token feed before they reach the A2UI parser.
+  ///
+  /// flutter_gemma exposes the engine's "thought" channel by inlining
+  /// it into the same stream as the final answer using these markers.
+  /// With audio attached, Gemma 4 reliably enters thinking mode even
+  /// when [createSession.enableThinking] is false — the engine
+  /// auto-thinks for multimodal inputs. Without this filter the
+  /// surface parser sees garbage like
+  /// `<|channel>thought\nThinking<channel|>` before any JSON envelope
+  /// and chokes on it. The implementation mirrors flutter_gemma's
+  /// own [filterThinkingStream] but yields raw [String] chunks rather
+  /// than typed `ModelResponse` events so it slots into our existing
+  /// `Stream<String>` plumbing.
+  Stream<String> _stripThoughtChannel(Stream<String> source) async* {
+    const startMarker = '<|channel>thought\n';
+    const endMarker = '<channel|>';
+    var inside = false;
+    var buffer = '';
+
+    int partialSuffixLength(String buf, String marker) {
+      final maxScan = buf.length < marker.length ? buf.length : marker.length;
+      for (var n = maxScan; n > 0; n--) {
+        if (buf.endsWith(marker.substring(0, n))) return n;
+      }
+      return 0;
+    }
+
+    await for (final token in source) {
+      buffer += token;
+      while (buffer.isNotEmpty) {
+        if (inside) {
+          final endIdx = buffer.indexOf(endMarker);
+          if (endIdx >= 0) {
+            buffer = buffer.substring(endIdx + endMarker.length);
+            inside = false;
+            continue;
+          }
+          // Hold onto a possible partial close marker; drop the rest.
+          final partial = partialSuffixLength(buffer, endMarker);
+          buffer = buffer.substring(buffer.length - partial);
+          break;
+        }
+        final startIdx = buffer.indexOf(startMarker);
+        if (startIdx >= 0) {
+          final pre = buffer.substring(0, startIdx);
+          if (pre.isNotEmpty) yield pre;
+          buffer = buffer.substring(startIdx + startMarker.length);
+          inside = true;
+          continue;
+        }
+        // No start marker yet; flush everything except a possible
+        // partial-marker tail so the next iteration can complete it.
+        final partial = partialSuffixLength(buffer, startMarker);
+        final safe = buffer.substring(0, buffer.length - partial);
+        if (safe.isNotEmpty) yield safe;
+        buffer = buffer.substring(buffer.length - partial);
+        break;
+      }
+    }
+    // Stream ended mid-block — drop a trailing thought, flush any
+    // surviving non-thought bytes.
+    if (!inside && buffer.isNotEmpty) {
+      yield buffer;
     }
   }
 
@@ -551,6 +622,14 @@ class LlmService {
       topP: 0.9,
       enableAudioModality: input.hasAudio,
       enableVisionModality: input.hasImage,
+      // Hard-disable Gemma 4's chain-of-thought channel for triage.
+      // With audio attached, the engine otherwise emits hundreds of
+      // `<|channel>thought\n…<channel|>` tokens before producing any
+      // final answer, blowing the decode budget on reasoning prose
+      // the surface parser cannot consume. We strip any thought
+      // markers that still leak through downstream in
+      // [_stripThoughtChannel].
+      enableThinking: false,
       systemInstruction: systemPrompt,
     );
     if (kDebugMode) {
@@ -594,8 +673,8 @@ class LlmService {
         );
       }
       await session.addQueryChunk(message);
-      await for (final token
-          in session.getResponseAsync().where((t) => t.isNotEmpty)) {
+      await for (final token in _stripThoughtChannel(
+          session.getResponseAsync().where((t) => t.isNotEmpty))) {
         if (kDebugMode) {
           tokenCount++;
           raw.write(token);

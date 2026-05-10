@@ -19,7 +19,7 @@ mixin _$AssistantState implements DiagnosticableTreeMixin {
 // ConversationTurn has captured the bytes. Drives the user-side
 // image thumbnail while the LLM is reasoning so the user can see
 // exactly what context the model is working with.
- Uint8List? get pendingUserImage;
+ Uint8List? get pendingUserImage; Uint8List? get pendingUserAudio;
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -31,21 +31,21 @@ $AssistantStateCopyWith<AssistantState> get copyWith => _$AssistantStateCopyWith
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'AssistantState'))
-    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage));
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage));
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio));
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage)';
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio)';
 }
 
 
@@ -56,7 +56,7 @@ abstract mixin class $AssistantStateCopyWith<$Res>  {
   factory $AssistantStateCopyWith(AssistantState value, $Res Function(AssistantState) _then) = _$AssistantStateCopyWithImpl;
 @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio
 });
 
 
@@ -73,7 +73,7 @@ class _$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,}) {
   return _then(_self.copyWith(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
@@ -83,6 +83,7 @@ as List<ConversationTurn>,surfaceReady: null == surfaceReady ? _self.surfaceRead
 as bool,thinkingTrace: null == thinkingTrace ? _self.thinkingTrace : thinkingTrace // ignore: cast_nullable_to_non_nullable
 as String,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
 as String?,pendingUserImage: freezed == pendingUserImage ? _self.pendingUserImage : pendingUserImage // ignore: cast_nullable_to_non_nullable
+as Uint8List?,pendingUserAudio: freezed == pendingUserAudio ? _self.pendingUserAudio : pendingUserAudio // ignore: cast_nullable_to_non_nullable
 as Uint8List?,
   ));
 }
@@ -168,10 +169,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio);case _:
   return orElse();
 
 }
@@ -189,10 +190,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio)  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState():
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -209,10 +210,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio)?  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio);case _:
   return null;
 
 }
@@ -224,7 +225,7 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 
 
 class _AssistantState extends AssistantState with DiagnosticableTreeMixin {
-  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.surfaceReady = false, this.thinkingTrace = '', this.errorMessage, this.pendingUserImage}): _turns = turns,super._();
+  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.surfaceReady = false, this.thinkingTrace = '', this.errorMessage, this.pendingUserImage, this.pendingUserAudio}): _turns = turns,super._();
   
 
 @override@JsonKey() final  AssistantStage stage;
@@ -246,6 +247,7 @@ class _AssistantState extends AssistantState with DiagnosticableTreeMixin {
 // image thumbnail while the LLM is reasoning so the user can see
 // exactly what context the model is working with.
 @override final  Uint8List? pendingUserImage;
+@override final  Uint8List? pendingUserAudio;
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
@@ -258,21 +260,21 @@ _$AssistantStateCopyWith<_AssistantState> get copyWith => __$AssistantStateCopyW
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'AssistantState'))
-    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage));
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage));
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio));
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage)';
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio)';
 }
 
 
@@ -283,7 +285,7 @@ abstract mixin class _$AssistantStateCopyWith<$Res> implements $AssistantStateCo
   factory _$AssistantStateCopyWith(_AssistantState value, $Res Function(_AssistantState) _then) = __$AssistantStateCopyWithImpl;
 @override @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio
 });
 
 
@@ -300,7 +302,7 @@ class __$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,}) {
   return _then(_AssistantState(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
@@ -310,6 +312,7 @@ as List<ConversationTurn>,surfaceReady: null == surfaceReady ? _self.surfaceRead
 as bool,thinkingTrace: null == thinkingTrace ? _self.thinkingTrace : thinkingTrace // ignore: cast_nullable_to_non_nullable
 as String,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
 as String?,pendingUserImage: freezed == pendingUserImage ? _self.pendingUserImage : pendingUserImage // ignore: cast_nullable_to_non_nullable
+as Uint8List?,pendingUserAudio: freezed == pendingUserAudio ? _self.pendingUserAudio : pendingUserAudio // ignore: cast_nullable_to_non_nullable
 as Uint8List?,
   ));
 }

@@ -103,6 +103,98 @@ class SttService {
     );
   }
 
+  /// Record raw speech to a WAV blob (no transcription) and return it
+  /// when VAD detects end-of-utterance.
+  ///
+  /// Used by Triage Mode's voice intake — the responder taps "Voice",
+  /// the mic opens, the recording auto-completes after a moment of
+  /// silence, and the resulting WAV is attached to the next LLM turn
+  /// as evidence. Gemma 4's audio modality consumes the WAV directly,
+  /// so we skip the STT round-trip the Ask Mode mic uses. Concatenates
+  /// every VAD speech segment into one float32 buffer, then re-encodes
+  /// in [_encodeWav]'s mono 16 kHz IEEE-float32 layout.
+  ///
+  /// Returns null if the stream completes before any speech is
+  /// detected. Caller is responsible for cancelling the source stream.
+  Future<Uint8List?> recordToWav(
+    Stream<Float32List> audio, {
+    int sampleRate = 16000,
+  }) async {
+    final vad = await _ensureVad();
+    vad.reset();
+
+    final completer = Completer<Uint8List?>();
+    final accumulated = <double>[];
+    Timer? endpointTimer;
+    var anySpeech = false;
+
+    void emit() {
+      endpointTimer?.cancel();
+      if (completer.isCompleted) return;
+      if (accumulated.isEmpty) {
+        completer.complete(null);
+        return;
+      }
+      final samples = Float32List.fromList(accumulated);
+      accumulated.clear();
+      completer.complete(_encodeWav(samples, sampleRate: sampleRate));
+    }
+
+    void scheduleEndpoint() {
+      endpointTimer?.cancel();
+      endpointTimer = Timer(_endpointSilence, emit);
+    }
+
+    void drainSegments() {
+      while (!vad.isEmpty()) {
+        final segment = vad.front();
+        vad.pop();
+        if (segment.samples.isEmpty) continue;
+        anySpeech = true;
+        accumulated.addAll(segment.samples);
+        scheduleEndpoint();
+      }
+    }
+
+    final sub = audio.listen(
+      (samples) {
+        if (samples.isEmpty || completer.isCompleted) return;
+        try {
+          vad.acceptWaveform(samples);
+          drainSegments();
+        } on Object catch (e, st) {
+          if (!completer.isCompleted) completer.completeError(e, st);
+        }
+      },
+      onError: (Object error, StackTrace st) {
+        if (!completer.isCompleted) completer.completeError(error, st);
+      },
+      onDone: () {
+        try {
+          vad.flush();
+          drainSegments();
+          if (!completer.isCompleted) {
+            if (!anySpeech) {
+              completer.complete(null);
+            } else {
+              emit();
+            }
+          }
+        } on Object catch (e, st) {
+          if (!completer.isCompleted) completer.completeError(e, st);
+        }
+      },
+      cancelOnError: true,
+    );
+
+    try {
+      return await completer.future;
+    } finally {
+      endpointTimer?.cancel();
+      await sub.cancel();
+    }
+  }
+
   /// Release native resources. Safe to call multiple times.
   Future<void> dispose() async {
     _disposeVad();

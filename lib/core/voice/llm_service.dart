@@ -741,7 +741,7 @@ Drafted an ICS-209 damage report. Confirm or edit.
 {"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
 ```
 ```json
-{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"disaster-report-generator","children":["d","r","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Concrete mid-rise partially collapsed; rebar exposed, debris to knee height. Unsafe to re-enter."},{"id":"r","component":"IncidentReportCard","format":"ICS-209","title":"Building Collapse Incident","report_number":"Initial","prepared_at":"2026-05-10T18:42:00Z","prepared_by":"[INFERRED — verify before submission]","body":"INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Building Collapse Incident\\nBLOCK 3. REPORT VERSION: [X] Initial\\nBLOCK 5. DATE/TIME: 2026-05-10 1842\\nBLOCK 7. INCIDENT TYPE: [X] Search & Rescue\\nBLOCK 14. SITUATION: Multi-storey concrete mid-rise partially collapsed, rebar exposed, debris to knee height. Structure unsafe to re-enter.\\nBLOCK 16. PUBLIC: Fatal: [UNKNOWN] | Injured: [UNKNOWN] | Missing: [UNKNOWN]\\nBLOCK 20. STRUCTURES: Threatened: 1 | Damaged: 0 | Destroyed: 1\\nBLOCK 23. OUTLOOK: Search-and-rescue ops pending; access via north flank only.\\nBLOCK 28. PREPARED BY: [INFERRED — verify before submission]"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"disaster-report-generator","children":["d","r","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Concrete mid-rise partially collapsed; rebar exposed, debris to knee height. Unsafe to re-enter."},{"id":"r","component":"IncidentReportCard","format":"ICS-209","title":"Building Collapse Incident","report_number":"Initial","prepared_at":"2026-05-10T18:42:00Z","prepared_by":"[INFERRED — verify before submission]","gps":"lat=19.20337, lng=72.82770 (±15m)","body":"INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Building Collapse Incident\\nBLOCK 3. REPORT VERSION: [X] Initial\\nBLOCK 5. DATE/TIME: 2026-05-10 1842\\nBLOCK 7. INCIDENT TYPE: [X] Search & Rescue\\nBLOCK 14. SITUATION: Multi-storey concrete mid-rise partially collapsed, rebar exposed, debris to knee height. Structure unsafe to re-enter.\\nBLOCK 16. PUBLIC: Fatal: [UNKNOWN] | Injured: [UNKNOWN] | Missing: [UNKNOWN]\\nBLOCK 20. STRUCTURES: Threatened: 1 | Damaged: 0 | Destroyed: 1\\nBLOCK 23. OUTLOOK: Search-and-rescue ops pending; access via north flank only.\\nBLOCK 28. PREPARED BY: [INFERRED — verify before submission]"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
 ```
 
 Cards (root id MUST be "root"; always include ConfirmActionBar):
@@ -756,8 +756,10 @@ Cards (root id MUST be "root"; always include ConfirmActionBar):
   (ICS-209, OCHA_SITREP, UN_FLASH_UPDATE, NDRRMC, IFRC_OPS_UPDATE,
   EU_ECHO_FLASH, PDNA). REQUIRED whenever skill_invoked is
   `disaster-report-generator`. Fields: format, title, report_number,
-  prepared_at, prepared_by, body (full filled template, ~1-3 KB,
-  preserve newlines with \\n).
+  prepared_at (ISO-8601 from the user prompt's `Captured at:` line),
+  prepared_by, gps (verbatim from user prompt's `gps=` line, eg.
+  `lat=19.20337, lng=72.82770 (±15m)`), body (full filled template,
+  ~1-3 KB, preserve newlines with \\n).
 Do NOT emit ThinkingTraceDrawer.
 
 If image attached: actually look at it and describe what you see (hazards,

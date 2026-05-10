@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:genui/genui.dart';
+import 'package:intl/intl.dart';
 import 'package:json_schema_builder/json_schema_builder.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
@@ -718,6 +719,11 @@ final CatalogItem incidentReportCard = _buildCard(
       'report_number': S.string(description: 'Report version, eg. "Update #3" or "Flash No. 2".'),
       'prepared_at': S.string(description: 'ISO-8601 timestamp the report was drafted.'),
       'prepared_by': S.string(description: 'Author + agency, eg. "S. Yamamoto (SITL) — USFS".'),
+      'gps': S.string(
+        description: 'GPS coordinates the report was captured at, '
+            'verbatim from the user prompt\'s `gps=` line, eg. '
+            '`lat=19.20337, lng=72.82770 (±15m)`. Empty if no GPS fix.',
+      ),
       'body': S.string(
         description: 'Full filled report text, preserving line breaks and '
             'indentation. Up to ~4 KB. Use placeholders like '
@@ -733,15 +739,18 @@ final CatalogItem incidentReportCard = _buildCard(
     final reportNumber = (data['report_number'] as String?) ?? '';
     final preparedAt = (data['prepared_at'] as String?) ?? '';
     final preparedBy = (data['prepared_by'] as String?) ?? '';
+    final gps = (data['gps'] as String?) ?? '';
     final body = (data['body'] as String?) ?? '';
 
     final headerLine = [
       if (title.isNotEmpty) title,
       if (reportNumber.isNotEmpty) reportNumber,
     ].join(' — ');
+    final preparedAtPretty = _humanReadableTimestamp(preparedAt);
+    final gpsPretty = _humanReadableGps(gps);
     final footerLine = [
       if (preparedBy.isNotEmpty) preparedBy,
-      if (preparedAt.isNotEmpty) preparedAt,
+      if (preparedAtPretty.isNotEmpty) preparedAtPretty,
     ].join(' · ');
 
     return _AegisCard(
@@ -753,6 +762,11 @@ final CatalogItem incidentReportCard = _buildCard(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const _EvidenceBlock(),
+          if (preparedAtPretty.isNotEmpty || gpsPretty.isNotEmpty)
+            _ReportMetadataStrip(
+              capturedAt: preparedAtPretty,
+              location: gpsPretty,
+            ),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 360),
             child: Container(
@@ -949,6 +963,113 @@ List<String> _stringList(Object? raw) {
 /// `ProviderNotFoundException`. The sink is updated by the cubit on
 /// every intake submit and turn commit. Renders nothing when no
 /// evidence is attached.
+/// Convert an ISO-8601 timestamp ("2026-05-10T11:45:00Z") into a
+/// human-readable local label ("May 10, 2026 · 11:45 AM"). Falls back
+/// to the original string if parsing fails so a malformed model
+/// output still surfaces something useful.
+String _humanReadableTimestamp(String iso) {
+  if (iso.isEmpty) return '';
+  try {
+    final dt = DateTime.parse(iso).toLocal();
+    return DateFormat('MMM d, yyyy · h:mm a').format(dt);
+  } on FormatException {
+    return iso;
+  }
+}
+
+/// Distil a `gps=lat=…, lng=…(±Nm)` evidence string down to a clean
+/// "19.20337°N, 72.82770°E (±15 m)" label. Accepts the loose formats
+/// the model can echo back without re-asking.
+String _humanReadableGps(String raw) {
+  if (raw.isEmpty) return '';
+  final latMatch = RegExp(r'lat\s*=\s*(-?\d+\.\d+)').firstMatch(raw);
+  final lngMatch = RegExp(r'(?:lng|lon)\s*=\s*(-?\d+\.\d+)').firstMatch(raw);
+  if (latMatch == null || lngMatch == null) return raw;
+  final lat = double.tryParse(latMatch.group(1)!);
+  final lng = double.tryParse(lngMatch.group(1)!);
+  if (lat == null || lng == null) return raw;
+  final accMatch = RegExp(r'±\s*([\d.]+)\s*m').firstMatch(raw);
+  final acc = accMatch?.group(1);
+  final latLabel = '${lat.abs().toStringAsFixed(5)}° ${lat >= 0 ? "N" : "S"}';
+  final lngLabel = '${lng.abs().toStringAsFixed(5)}° ${lng >= 0 ? "E" : "W"}';
+  return acc == null
+      ? '$latLabel, $lngLabel'
+      : '$latLabel, $lngLabel (±$acc m)';
+}
+
+/// Compact captured-at + location pill row rendered above the report
+/// body. Surfaces the responder-facing metadata the model embedded in
+/// `prepared_at` / `gps` without forcing them to scan the form blocks.
+class _ReportMetadataStrip extends StatelessWidget {
+  const _ReportMetadataStrip({
+    required this.capturedAt,
+    required this.location,
+  });
+
+  final String capturedAt;
+  final String location;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: [
+          if (capturedAt.isNotEmpty)
+            _MetadataPill(
+              icon: Icons.schedule,
+              label: capturedAt,
+            ),
+          if (location.isNotEmpty)
+            _MetadataPill(
+              icon: Icons.place_outlined,
+              label: location,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetadataPill extends StatelessWidget {
+  const _MetadataPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.indigo.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: Colors.indigo.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: Colors.indigo.shade700),
+          const SizedBox(width: 5),
+          SelectableText(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              color: Colors.indigo.shade900,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EvidenceBlock extends StatelessWidget {
   const _EvidenceBlock();
 

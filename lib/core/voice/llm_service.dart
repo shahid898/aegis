@@ -506,6 +506,28 @@ class LlmService {
   /// own [filterThinkingStream] but yields raw [String] chunks rather
   /// than typed `ModelResponse` events so it slots into our existing
   /// `Stream<String>` plumbing.
+  /// Print [body] alongside [label] in chunks small enough that
+  /// Android's logcat (and Flutter's `debugPrint` rate-limiter) won't
+  /// truncate them. Each line of [body] is preserved; long single
+  /// lines are split into ~900-char windows. We use this for raw LLM
+  /// output dumps so the responder can verify the whole emitted JSON
+  /// without hitting the default ~800-char clip.
+  static void _logChunked(String label, String body) {
+    debugPrint(label);
+    if (body.isEmpty) return;
+    const window = 900;
+    for (final line in body.split('\n')) {
+      if (line.length <= window) {
+        debugPrint(line);
+      } else {
+        for (var i = 0; i < line.length; i += window) {
+          final end = (i + window).clamp(0, line.length);
+          debugPrint(line.substring(i, end));
+        }
+      }
+    }
+  }
+
   Stream<String> _stripThoughtChannel(Stream<String> source) async* {
     const startMarker = '<|channel>thought\n';
     const endMarker = '<channel|>';
@@ -684,14 +706,12 @@ class LlmService {
       stopwatch.stop();
       if (kDebugMode) {
         final preview = raw.toString();
-        final clipped =
-            preview.length > 600 ? '${preview.substring(0, 600)}…' : preview;
         debugPrint(
           '[Aegis][LLM] triageStream end '
           'tokens=$tokenCount chars=${preview.length} '
           'elapsedMs=${stopwatch.elapsedMilliseconds}',
         );
-        debugPrint('[Aegis][LLM] rawOutput:\n$clipped');
+        _logChunked('[Aegis][LLM] rawOutput:', preview);
       }
       try {
         await session.close();
@@ -741,7 +761,7 @@ Drafted an ICS-209 damage report. Confirm or edit.
 {"version":"v0.9","createSurface":{"surfaceId":"aegis-home","catalogId":"$catalogId","sendDataModel":true}}
 ```
 ```json
-{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"disaster-report-generator","children":["d","r","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Concrete mid-rise partially collapsed; rebar exposed, debris to knee height. Unsafe to re-enter."},{"id":"r","component":"IncidentReportCard","format":"ICS-209","title":"Building Collapse Incident","report_number":"Initial","prepared_at":"2026-05-10T18:42:00Z","prepared_by":"[INFERRED — verify before submission]","gps":"lat=19.20337, lng=72.82770 (±15m)","body":"INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Building Collapse Incident\\nBLOCK 3. REPORT VERSION: [X] Initial\\nBLOCK 5. DATE/TIME: 2026-05-10 1842\\nBLOCK 7. INCIDENT TYPE: [X] Search & Rescue\\nBLOCK 14. SITUATION: Multi-storey concrete mid-rise partially collapsed, rebar exposed, debris to knee height. Structure unsafe to re-enter.\\nBLOCK 16. PUBLIC: Fatal: [UNKNOWN] | Injured: [UNKNOWN] | Missing: [UNKNOWN]\\nBLOCK 20. STRUCTURES: Threatened: 1 | Damaged: 0 | Destroyed: 1\\nBLOCK 23. OUTLOOK: Search-and-rescue ops pending; access via north flank only.\\nBLOCK 28. PREPARED BY: [INFERRED — verify before submission]"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
+{"version":"v0.9","updateComponents":{"surfaceId":"aegis-home","components":[{"id":"root","component":"Column","skill_invoked":"disaster-report-generator","children":["d","r","c"]},{"id":"d","component":"DamageCard","category":3,"fema_scale":"HAZUS_EXTENSIVE","description":"Concrete mid-rise partially collapsed; rebar exposed, debris to knee height. Unsafe to re-enter."},{"id":"r","component":"IncidentReportCard","format":"ICS-209","title":"Building Collapse Incident","report_number":"Initial","prepared_at":"2026-05-10T18:42:00Z","prepared_by":"Aegis Triage Auto-Draft","gps":"lat=19.20337, lng=72.82770 (±15m)","body":"INCIDENT STATUS SUMMARY — ICS FORM 209\\nBLOCK 1. INCIDENT NAME: Building Collapse Incident\\nBLOCK 3. REPORT VERSION: [X] Initial\\nBLOCK 5. DATE/TIME: 2026-05-10 1842\\nBLOCK 7. INCIDENT TYPE: [X] Search & Rescue\\nBLOCK 14. SITUATION: Multi-storey concrete mid-rise partially collapsed, rebar exposed, debris to knee height. Structure unsafe to re-enter.\\nBLOCK 16. PUBLIC: Fatal: 0 reported | Injured: 0 reported | Missing: 0 reported\\nBLOCK 20. STRUCTURES: Threatened: 1 | Damaged: 0 | Destroyed: 1\\nBLOCK 23. OUTLOOK: Search-and-rescue ops pending; access via north flank only.\\nBLOCK 28. PREPARED BY: Aegis Triage Auto-Draft"},{"id":"c","component":"ConfirmActionBar","primary_action":"Confirm","secondary_action":"Edit"}]}}
 ```
 
 Cards (root id MUST be "root"; always include ConfirmActionBar):
@@ -778,8 +798,24 @@ filled report body. Pick format: US/FEMA → ICS-209; UN/NGO ongoing →
 OCHA_SITREP; first 72 hrs after sudden-onset → UN_FLASH_UPDATE;
 Philippines/SE Asia → NDRRMC; Red Cross → IFRC_OPS_UPDATE; EU
 member state → EU_ECHO_FLASH; recovery planning → PDNA. Default to
-ICS-209 if ambiguous. Fill every required block; mark unknowns with
-`[INFERRED — verify before submission]` or `[UNKNOWN — to be confirmed]`.
+ICS-209 if ambiguous.
+
+Field-fill rules:
+* `prepared_by` — ALWAYS literal string `"Aegis Triage Auto-Draft"`.
+  Never `[INFERRED]`; the responder will replace this with their own
+  name + agency at confirm time.
+* Casualty / count fields (Fatal / Injured / Missing / Affected /
+  Displaced) — use `0 reported` when nothing is mentioned in the
+  evidence, NOT `[UNKNOWN]`. Use the actual number if the user said
+  one. The "0 reported" wording signals "no count yet" without
+  blocking the report on a placeholder.
+* Structural counts (Threatened / Damaged / Destroyed) — count from
+  what the photo / statement clearly shows; default to 1 for the
+  primary affected structure and 0 for the rest.
+* Use `[INFERRED — verify before submission]` ONLY for fields the
+  model genuinely guessed (e.g. exact incident name, agency name).
+* Never wrap entire blocks in placeholders. Every block has a real
+  best-effort value PLUS optional `[INFERRED]` annotation.
 
 Never invent locations or identifiers not in the user's message.
 ''';

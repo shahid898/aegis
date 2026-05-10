@@ -187,6 +187,28 @@ abstract class AssistantState with _$AssistantState {
 /// Verification chrome (Confirm / Reject) only appears when the agent
 /// emits a `ConfirmActionBar` inside the surface. A purely text reply
 /// commits straight to history and the mic re-opens.
+/// Print [body] alongside [label] across multiple `debugPrint` calls
+/// so neither Android logcat (~1 KB per line) nor Flutter's debug
+/// rate-limiter clip the raw LLM output. Splits on newlines first,
+/// then chops any individual line longer than ~900 chars into
+/// equal-sized windows. Top-level so the cubit (and any other site
+/// inside this file) can call it without wiring through state.
+void _logFullRawOutput(String label, String body) {
+  debugPrint(label);
+  if (body.isEmpty) return;
+  const window = 900;
+  for (final line in body.split('\n')) {
+    if (line.length <= window) {
+      debugPrint(line);
+    } else {
+      for (var i = 0; i < line.length; i += window) {
+        final end = (i + window).clamp(0, line.length);
+        debugPrint(line.substring(i, end));
+      }
+    }
+  }
+}
+
 class AssistantCubit extends Cubit<AssistantState> {
   AssistantCubit({
     required AudioRecorderService recorder,
@@ -877,10 +899,6 @@ class AssistantCubit extends Cubit<AssistantState> {
       },
       onError: (Object e, StackTrace st) {
         if (kDebugMode) {
-          final preview = rawBuffer.toString();
-          final clipped = preview.length > 400
-              ? '${preview.substring(0, 400)}…'
-              : preview;
           debugPrint(
             '[Aegis][Cubit] triageStream onError '
             'rawTokens=$rawTokenCount '
@@ -888,7 +906,10 @@ class AssistantCubit extends Cubit<AssistantState> {
             'elapsedMs=${streamSw.elapsedMilliseconds} '
             'error=$e',
           );
-          debugPrint('[Aegis][Cubit] triageStream rawSoFar:\n$clipped');
+          _logFullRawOutput(
+            '[Aegis][Cubit] triageStream rawSoFar:',
+            rawBuffer.toString(),
+          );
           debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] triageStream stack');
         }
         if (!completer.isCompleted) completer.completeError(e, st);
@@ -918,11 +939,7 @@ class AssistantCubit extends Cubit<AssistantState> {
           'textChunks=$textChunkCount textChars=$textCharCount '
           'spokeAtLeastOne=$spokeAtLeastOne',
         );
-        final preview = rawBuffer.toString();
-        final clipped = preview.length > 800
-            ? '${preview.substring(0, 800)}…'
-            : preview;
-        debugPrint('[Aegis][Cubit] rawOutput:\n$clipped');
+        _logFullRawOutput('[Aegis][Cubit] rawOutput:', rawBuffer.toString());
       }
       if (spokeAtLeastOne) {
         await _tts.whenIdle;
@@ -1000,10 +1017,6 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
     } on Object catch (e, st) {
       if (kDebugMode) {
-        final preview = rawBuffer.toString();
-        final clipped = preview.length > 800
-            ? '${preview.substring(0, 800)}…'
-            : preview;
         debugPrint(
           '[Aegis][Cubit] _respondTo failed '
           'rawTokens=$rawTokenCount '
@@ -1012,9 +1025,10 @@ class AssistantCubit extends Cubit<AssistantState> {
           'sawSurface=$sawSurface '
           'error=$e',
         );
-        if (preview.isNotEmpty) {
-          debugPrint('[Aegis][Cubit] _respondTo rawSoFar:\n$clipped');
-        }
+        _logFullRawOutput(
+          '[Aegis][Cubit] _respondTo rawSoFar:',
+          rawBuffer.toString(),
+        );
         debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] _respondTo stack');
       }
       if (_conversationActive) {

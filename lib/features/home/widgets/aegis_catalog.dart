@@ -767,6 +767,8 @@ final CatalogItem incidentReportCard = _buildCard(
               capturedAt: preparedAtPretty,
               location: gpsPretty,
             ),
+          if (body.contains('[INFERRED') || body.contains('[UNKNOWN'))
+            const _PlaceholderLegend(),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 360),
             child: Container(
@@ -1027,6 +1029,49 @@ class _ReportMetadataStrip extends StatelessWidget {
               icon: Icons.place_outlined,
               label: location,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One-line explainer rendered above the form body whenever the
+/// model emitted `[INFERRED …]` or `[UNKNOWN …]` placeholders. The
+/// markers themselves are amber-pilled inline, but a responder
+/// glancing at the report needs to know what those chips MEAN
+/// before they hit Confirm.
+class _PlaceholderLegend extends StatelessWidget {
+  const _PlaceholderLegend();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.amber.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.amber.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline,
+              size: 14, color: Colors.brown.shade700),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Amber chips mark fields the model could not verify from '
+              'the captured evidence — confirm or replace them before '
+              'submitting. "0 reported" means no count was given; edit '
+              'if you have a real number.',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.brown.shade900,
+                height: 1.35,
+              ),
+            ),
+          ),
         ],
       ),
     );

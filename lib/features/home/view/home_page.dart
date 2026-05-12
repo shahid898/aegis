@@ -3,14 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:genui/genui.dart' as genui;
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router.dart';
-import '../widgets/aegis_catalog.dart';
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/storage_service.dart';
@@ -20,20 +18,17 @@ import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
 import '../../reports/data/reports_repository.dart';
 import '../cubit/assistant_cubit.dart';
+import '../widgets/aegis_audio_chip.dart';
+import '../widgets/triage_intake_panel.dart';
+import '../widgets/triage_report_card.dart';
 
 /// Home screen — the single Aegis surface.
 ///
 /// One screen does it all: chat with the assistant, see the streaming
-/// transcript, hear the spoken reply, and — when the situation calls for
-/// it — interact with a generated A2UI surface (capture-evidence
-/// prompts, ICS-209 cards, evacuation plans, etc.) inline in the same
-/// chat thread. The agent decides whether to render a surface; the UI
-/// renders it inline when present and shows a plain reply bubble when
-/// not.
-///
-/// - Big circular push-to-talk button (tap to start, tap again to stop).
-/// - Long-press the button to trigger the SOS fallback: dial the first
-///   saved emergency contact, copy the current location to the clipboard.
+/// transcript, hear the spoken reply, and — when the situation calls
+/// for it — render a fixed [TriageReportCard] built from the structured
+/// payload Gemma 4 emits via its `render_triage_report` native tool
+/// call.
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -58,9 +53,6 @@ class HomePage extends StatelessWidget {
   }
 }
 
-/// Stateful view so we can subscribe to the cubit's intake hooks
-/// (text-input modal request + stub-button snackbars). Subscriptions
-/// live for the lifetime of the home screen.
 class _HomeView extends StatefulWidget {
   const _HomeView();
 
@@ -83,10 +75,14 @@ class _HomeViewState extends State<_HomeView> {
     ];
   }
 
-  /// Open the system image picker. We surface a small action sheet so
-  /// the user can choose between camera capture and gallery — common
-  /// triage flows want both (the responder shoots a fresh frame; the
-  /// survivor attaches a screenshot or saved image).
+  @override
+  void dispose() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    super.dispose();
+  }
+
   Future<void> _openPhotoPicker() async {
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -116,8 +112,6 @@ class _HomeViewState extends State<_HomeView> {
 
     try {
       final picker = ImagePicker();
-      // Cap source-side resolution at 1920px so we don't load a 12MP
-      // frame into memory just to scale it back down to 512.
       final XFile? file = await picker.pickImage(
         source: source,
         maxWidth: 1920,
@@ -136,16 +130,10 @@ class _HomeViewState extends State<_HomeView> {
     }
   }
 
-  @override
-  void dispose() {
-    for (final s in _subs) {
-      s.cancel();
-    }
-    super.dispose();
-  }
-
   Future<void> _openTextEditor() async {
-    final controller = TextEditingController();
+    final controller = TextEditingController(
+      text: _cubit.state.intakeText,
+    );
     final result = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
@@ -291,12 +279,6 @@ class _Header extends StatelessWidget {
   }
 }
 
-/// Renders both the running [AssistantState.turns] history and the
-/// in-flight transcript / response bubbles. Owns its own
-/// [ScrollController] so we pin to the most recent bubble as the
-/// model streams. When the agent emits a surface for the in-flight
-/// turn, the live `genui.Surface` widget renders inline in place of
-/// the streaming text bubble.
 class _TranscriptArea extends StatefulWidget {
   const _TranscriptArea({required this.state});
   final AssistantState state;
@@ -313,10 +295,10 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     super.didUpdateWidget(oldWidget);
     final old = oldWidget.state;
     final next = widget.state;
-    final grew =
-        next.turns.length != old.turns.length ||
+    final grew = next.turns.length != old.turns.length ||
         next.transcript.length != old.transcript.length ||
         next.response.length != old.response.length ||
+        next.intakeOpen != old.intakeOpen ||
         next.surfaceReady != old.surfaceReady ||
         next.stage != old.stage;
     if (grew) {
@@ -343,16 +325,16 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     final hasTranscript = state.transcript.isNotEmpty;
     final hasResponse = state.response.isNotEmpty;
     final hasHistory = state.turns.isNotEmpty;
-    final hasSurface = state.surfaceReady;
-    final isVerifying = state.stage == AssistantStage.awaitingConfirmation;
+    final hasPendingImage = state.pendingUserImage?.isNotEmpty ?? false;
+    final hasPendingAudio = state.pendingUserAudio?.isNotEmpty ?? false;
     final hasInflight = hasTranscript ||
         hasResponse ||
-        hasSurface ||
-        (state.pendingUserImage?.isNotEmpty ?? false) ||
-        (state.pendingUserAudio?.isNotEmpty ?? false) ||
+        hasPendingImage ||
+        hasPendingAudio ||
         state.stage == AssistantStage.thinking;
+    final intakeOpen = state.intakeOpen;
 
-    if (!hasInflight && !hasHistory) {
+    if (!hasInflight && !hasHistory && !intakeOpen) {
       return const Center(
         child: Text(
           'Tap the button below to start a\nconversation with Aegis.',
@@ -366,7 +348,9 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
       );
     }
 
-    final itemCount = state.turns.length + (hasInflight ? 1 : 0);
+    final inflightCount = hasInflight ? 1 : 0;
+    final intakeCount = intakeOpen ? 1 : 0;
+    final itemCount = state.turns.length + inflightCount + intakeCount;
 
     return ListView.builder(
       controller: _controller,
@@ -395,330 +379,80 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   align: CrossAxisAlignment.start,
                   background: Colors.white,
                 ),
-                if (turn.hadSurface) ...[
-                  const SizedBox(height: 8),
-                  _SurfaceArchivedChip(turn: turn),
+                if (turn.report != null) ...[
+                  const SizedBox(height: 12),
+                  TriageReportCard(report: turn.report!),
                 ],
               ],
             ),
           );
         }
 
-        // In-flight turn: streaming transcript, partial response, and/or
-        // a live A2UI surface. The agent may emit any subset.
-        final hasPendingImage = (state.pendingUserImage?.isNotEmpty ?? false);
-        final hasPendingAudio = (state.pendingUserAudio?.isNotEmpty ?? false);
-        final showUser = hasTranscript || hasPendingImage || hasPendingAudio;
-        final showThinking = state.stage == AssistantStage.thinking &&
-            !hasResponse &&
-            !hasSurface;
-        return Padding(
-          padding: EdgeInsets.only(top: isFirst ? 0 : 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (showUser)
-                _Bubble(
-                  label: 'You',
-                  text: state.transcript,
-                  align: CrossAxisAlignment.end,
-                  background: AegisColors.primary.withValues(alpha: 0.10),
-                  image: state.pendingUserImage,
-                  audio: state.pendingUserAudio,
-                ),
-              if (showThinking) ...[
-                if (showUser) const SizedBox(height: 12),
-                const _ThinkingBubble(),
-              ],
-              if (hasResponse) ...[
-                if (showUser) const SizedBox(height: 12),
-                _Bubble(
-                  label: 'Aegis',
-                  text: state.response,
-                  align: CrossAxisAlignment.start,
-                  background: Colors.white,
-                ),
-              ],
-              if (hasSurface) ...[
-                const SizedBox(height: 12),
-                const _LiveSurface(),
-              ],
-              if (isVerifying) ...[
-                const SizedBox(height: 12),
-                _ThinkingTraceDrawer(trace: state.thinkingTrace),
-                // Host-owned reject/confirm row is only rendered when the
-                // surface itself doesn't already carry a ConfirmActionBar.
-                // The agent's prompt mandates a ConfirmActionBar, so 99% of
-                // turns this branch is skipped — keeping it as a fallback so
-                // a misbehaving model that forgets the action bar still
-                // leaves the user a way out.
-                if (!hasSurface) ...[
-                  const SizedBox(height: 12),
-                  const _VerificationActions(),
+        // In-flight turn first, intake panel after.
+        if (hasInflight && index == state.turns.length) {
+          final showUser =
+              hasTranscript || hasPendingImage || hasPendingAudio;
+          final showThinking = state.stage == AssistantStage.thinking;
+          return Padding(
+            padding: EdgeInsets.only(top: isFirst ? 0 : 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (showUser)
+                  _Bubble(
+                    label: 'You',
+                    text: state.transcript,
+                    align: CrossAxisAlignment.end,
+                    background:
+                        AegisColors.primary.withValues(alpha: 0.10),
+                    image: state.pendingUserImage,
+                    audio: state.pendingUserAudio,
+                  ),
+                if (showThinking) ...[
+                  if (showUser) const SizedBox(height: 12),
+                  const _ThinkingBubble(),
+                ],
+                if (hasResponse) ...[
+                  if (showUser) const SizedBox(height: 12),
+                  _Bubble(
+                    label: 'Aegis',
+                    text: state.response,
+                    align: CrossAxisAlignment.start,
+                    background: Colors.white,
+                  ),
                 ],
               ],
-            ],
+            ),
+          );
+        }
+
+        // Intake panel slot.
+        return Padding(
+          padding: EdgeInsets.only(top: isFirst ? 0 : 16),
+          child: BlocBuilder<AssistantCubit, AssistantState>(
+            buildWhen: (a, b) =>
+                a.intakeText != b.intakeText ||
+                a.intakeHasPhoto != b.intakeHasPhoto ||
+                a.intakeHasAudio != b.intakeHasAudio ||
+                a.intakeImagePreview != b.intakeImagePreview ||
+                a.canSubmitIntake != b.canSubmitIntake,
+            builder: (context, intakeState) {
+              final cubit = context.read<AssistantCubit>();
+              return TriageIntakePanel(
+                text: intakeState.intakeText,
+                hasPhoto: intakeState.intakeHasPhoto,
+                hasAudio: intakeState.intakeHasAudio,
+                imagePreview: intakeState.intakeImagePreview,
+                onTextRequested: cubit.requestIntakeText,
+                onPhotoRequested: cubit.requestIntakePhoto,
+                onAudioRequested: () => cubit.requestIntakeAudio(),
+                onSubmit: () => cubit.submitIntake(),
+                canSubmit: intakeState.canSubmitIntake,
+              );
+            },
           ),
         );
       },
-    );
-  }
-}
-
-/// Live A2UI surface for the in-flight turn. Bound to the cubit's
-/// [genui.SurfaceController] via `contextFor(surfaceId)`. Cards render
-/// progressively as Gemma 4 streams JSON envelopes — the user sees a
-/// damage card pop in, then a casualty card, then a confirm bar, in
-/// real time.
-class _LiveSurface extends StatelessWidget {
-  const _LiveSurface();
-
-  @override
-  Widget build(BuildContext context) {
-    final controller = context.read<AssistantCubit>().surfaceController;
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
-        ),
-      ),
-      child: genui.Surface(
-        surfaceContext: controller.contextFor(AssistantCubit.surfaceId),
-      ),
-    );
-  }
-}
-
-/// Tappable chip on a past turn that emitted a surface. Tapping opens
-/// a modal that replays the captured A2UI messages into a private
-/// SurfaceController so the user can re-inspect what was rendered at
-/// the time. We don't keep the historical surface live in the main
-/// controller (it's already been overwritten by later turns) — instead
-/// we re-mount the messages on demand.
-class _SurfaceArchivedChip extends StatelessWidget {
-  const _SurfaceArchivedChip({required this.turn});
-
-  final ConversationTurn turn;
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(999),
-        onTap: () => _showArchivedSurface(context, turn),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: AegisColors.primary.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Icon(Icons.dashboard_customize_outlined, size: 14),
-              SizedBox(width: 6),
-              Text(
-                'Action card · tap to view',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AegisColors.onSurface,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showArchivedSurface(
-    BuildContext context,
-    ConversationTurn turn,
-  ) async {
-    final cubit = context.read<AssistantCubit>();
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (sheetContext) => _ArchivedSurfaceSheet(
-        catalog: cubit.catalog,
-        messages: turn.surfaceMessages,
-        userText: turn.user,
-      ),
-    );
-  }
-}
-
-/// Modal that mounts a private [genui.SurfaceController], replays the
-/// captured A2UI messages from a past turn, and renders the resulting
-/// surface inside a [genui.Surface] widget. The controller is owned by
-/// the modal — disposed when the sheet closes — so the live home
-/// surface controller stays untouched.
-class _ArchivedSurfaceSheet extends StatefulWidget {
-  const _ArchivedSurfaceSheet({
-    required this.catalog,
-    required this.messages,
-    required this.userText,
-  });
-
-  final genui.Catalog catalog;
-  final List<genui.A2uiMessage> messages;
-  final String userText;
-
-  @override
-  State<_ArchivedSurfaceSheet> createState() => _ArchivedSurfaceSheetState();
-}
-
-class _ArchivedSurfaceSheetState extends State<_ArchivedSurfaceSheet> {
-  late final genui.SurfaceController _controller;
-  String? _surfaceId;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = genui.SurfaceController(catalogs: [widget.catalog]);
-    for (final message in widget.messages) {
-      _controller.handleMessage(message);
-      // Capture the first createSurface's id so the Surface widget
-      // can subscribe to the right ValueListenable. We can't reuse the
-      // live surfaceId because that's bound to the active controller.
-      if (_surfaceId == null && message is genui.CreateSurface) {
-        _surfaceId = message.surfaceId;
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final viewInsets = MediaQuery.of(context).viewInsets;
-    final maxHeight = MediaQuery.of(context).size.height * 0.85;
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxHeight: maxHeight),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(16, 0, 16, viewInsets.bottom + 16),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'You: "${widget.userText}"',
-                  style: TextStyle(
-                    color: AegisColors.onSurfaceMuted,
-                    fontSize: 13,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-              if (_surfaceId == null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 32),
-                  child: Center(
-                    child: Text(
-                      '(no surface to replay)',
-                      style: TextStyle(color: AegisColors.onSurfaceMuted),
-                    ),
-                  ),
-                )
-              else
-                genui.Surface(
-                  surfaceContext: _controller.contextFor(_surfaceId!),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ThinkingTraceDrawer extends StatefulWidget {
-  const _ThinkingTraceDrawer({required this.trace});
-
-  final String trace;
-
-  @override
-  State<_ThinkingTraceDrawer> createState() => _ThinkingTraceDrawerState();
-}
-
-class _ThinkingTraceDrawerState extends State<_ThinkingTraceDrawer> {
-  bool _open = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListTile(
-            leading: const Icon(Icons.psychology_alt_outlined),
-            title: const Text('Reasoning trace'),
-            subtitle: Text(_open
-                ? 'Tap to hide'
-                : 'Inspect why Aegis composed this card'),
-            trailing: Icon(_open ? Icons.expand_less : Icons.expand_more),
-            onTap: () => setState(() => _open = !_open),
-          ),
-          if (_open)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Text(
-                widget.trace.isEmpty ? '(no trace recorded)' : widget.trace,
-                style: const TextStyle(
-                  color: AegisColors.onSurfaceMuted,
-                  fontSize: 13,
-                  height: 1.4,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _VerificationActions extends StatelessWidget {
-  const _VerificationActions();
-
-  @override
-  Widget build(BuildContext context) {
-    final cubit = context.read<AssistantCubit>();
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: () => cubit.rejectSurface(),
-            icon: const Icon(Icons.refresh),
-            label: const Text('Reject'),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: FilledButton.icon(
-            onPressed: cubit.confirmSurface,
-            icon: const Icon(Icons.check),
-            label: const Text('Confirm'),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -920,6 +654,11 @@ class _PttButton extends StatelessWidget {
       onTap: () {
         if (isDegraded) return;
         if (state.stage == AssistantStage.preparing) return;
+        if (state.stage == AssistantStage.awaitingConfirmation &&
+            state.surfaceReady) {
+          cubit.confirmSurface();
+          return;
+        }
         cubit.toggleConversation();
       },
       child: AnimatedContainer(
@@ -946,8 +685,8 @@ class _PttButton extends StatelessWidget {
           isDegraded
               ? Icons.sos
               : showStopGlyph
-              ? (isListening ? Icons.graphic_eq : Icons.stop_rounded)
-              : Icons.mic,
+                  ? (isListening ? Icons.graphic_eq : Icons.stop_rounded)
+                  : Icons.mic,
           color: Colors.white,
           size: 88,
         ),

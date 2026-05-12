@@ -65,14 +65,23 @@ dependencies:
   flutter_sound: ^9.30.0
 
   # On-device LLM runtime (Phase 3 assistant brain).
-  # 0.14.0 replaces the buggy Kotlin LiteRtLm AAR on Android with a Dart
-  # FFI path (same as desktop/iOS). 0.13.x's Kotlin
+  # 0.15.0 adds `ModelType.gemma4` — native function calling via
+  # LiteRT-LM's `litert_lm_conversation_config_set_tools` API. Tool
+  # definitions ship as OpenAI Chat Completions JSON; the SDK applies
+  # `chat_template.jinja` through `minja`, renders native
+  # `<|tool>declaration:…<tool|>` tokens, and parses the model's
+  # `<|tool_call>…<tool_call|>` response into a structured
+  # `FunctionCallResponse`. No Dart-side prompt engineering, no JSON
+  # repair. 0.15.0 also restores Android NPU on `.litertlm`.
+  #
+  # 0.14.0 replaced the buggy Kotlin LiteRtLm AAR on Android with a
+  # Dart FFI path (same as desktop/iOS); 0.13.x's Kotlin
   # `Conversation$JniMessageCallbackImpl` was the source of the
-  # `MarkPendingInputTokenAsProcessed` and `AddPendingInputToken called
-  # with an existing pending token` errors that surfaced whenever we
-  # closed and recreated sessions to swap audio modality on/off between
-  # transcription and chat turns.
-  flutter_gemma: ^0.14.0
+  # `MarkPendingInputTokenAsProcessed` and `AddPendingInputToken
+  # called with an existing pending token` errors that surfaced when
+  # we closed and recreated sessions to swap audio modality on/off
+  # between transcription and chat turns.
+  flutter_gemma: ^0.15.0
 
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2
@@ -93,22 +102,6 @@ dependencies:
   # creation, so capabilities are discoverable without a code change.
   yaml: ^3.1.2
 
-  # Flutter Labs' generative-UI framework (BSD-3) — implements the
-  # A2UI v0.9 protocol (https://a2ui.org). We use:
-  #   * SurfaceController + Catalog + CatalogItem for the dynamic
-  #     widget registry (basic catalog + 9 Aegis-specific cards).
-  #   * A2uiTransportAdapter to parse Gemma 4's streaming token
-  #     output into A2UI messages on the fly.
-  #   * Surface widget to render the live tree the model is composing.
-  # Pulls audioplayers + video_player; that's fine — we will reuse
-  # them for survivor-statement playback in a later sprint.
-  genui: ^0.9.0
-
-  # Schema builder used by genui's CatalogItem to declare the
-  # JSON shape of each card's `data` payload. Transitive via
-  # genui, but we use the `S` shortcut directly in our
-  # aegis_catalog.dart so the linter wants it as a direct dep.
-  json_schema_builder: ^0.1.3
 
 dev_dependencies:
   flutter_test:

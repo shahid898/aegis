@@ -1,26 +1,21 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:genui/genui.dart' as genui;
 import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
-import '../../home/cubit/assistant_cubit.dart';
-import '../../home/widgets/aegis_catalog.dart';
+import '../../home/widgets/aegis_audio_chip.dart';
+import '../../home/widgets/triage_report_card.dart';
 import '../data/report.dart';
 import '../data/reports_repository.dart';
 
-/// Reports archive — every confirmed triage card lands here. The user
-/// reaches this page from the history icon in the home header.
-///
-/// Two screens in one file:
+/// Reports archive — every confirmed triage card lands here. Two
+/// screens in one file:
 ///   * [ReportsPage] — list view, newest first, with delete-on-swipe.
-///   * [_ReportDetailPage] — surface replay using the same Aegis
-///     catalog so the rendered card matches what the user originally
-///     confirmed.
+///   * [_ReportDetailPage] — renders the persisted [TriageReport] via
+///     [TriageReportCard] (the same widget the home page uses).
 class ReportsPage extends StatelessWidget {
   const ReportsPage({super.key});
 
@@ -70,7 +65,7 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
+            const Icon(
               Icons.assignment_outlined,
               size: 64,
               color: AegisColors.onSurfaceMuted,
@@ -112,7 +107,13 @@ class _ReportTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final time = DateFormat.yMMMd().add_jm().format(report.createdAt.toLocal());
+    final time =
+        DateFormat.yMMMd().add_jm().format(report.createdAt.toLocal());
+    final decoded = report.report;
+    final title = decoded?.title ?? report.userText;
+    final subtitle = decoded?.summary.isNotEmpty == true
+        ? decoded!.summary
+        : _oneLine(report.assistantText);
     return Dismissible(
       key: ValueKey(report.id),
       direction: DismissDirection.endToStart,
@@ -149,14 +150,12 @@ class _ReportTile extends StatelessWidget {
       child: ListTile(
         leading: const Icon(Icons.dashboard_customize_outlined),
         title: Text(
-          report.userText.isEmpty ? '(no input text)' : report.userText,
+          title.isEmpty ? '(no input text)' : title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
-          report.assistantText.isEmpty
-              ? time
-              : '$time · ${_oneLine(report.assistantText)}',
+          subtitle.isEmpty ? time : '$time · $subtitle',
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
@@ -170,10 +169,6 @@ class _ReportTile extends StatelessWidget {
       s.replaceAll(RegExp(r'\s+'), ' ').trim();
 }
 
-/// Replays the report's saved raw LLM output through
-/// [genui.A2uiParserTransformer] into a private [genui.SurfaceController]
-/// so the original card renders identical to confirm-time. We mount
-/// the same Aegis catalog the home page uses — no surface drift.
 class _ReportDetailPage extends StatefulWidget {
   const _ReportDetailPage({required this.report});
 
@@ -184,91 +179,42 @@ class _ReportDetailPage extends StatefulWidget {
 }
 
 class _ReportDetailPageState extends State<_ReportDetailPage> {
-  late final genui.Catalog _catalog;
-  late final genui.SurfaceController _controller;
-  StreamController<String>? _input;
-  StreamSubscription<genui.GenerationEvent>? _sub;
-  String? _surfaceId;
-  String _replayedText = '';
+  Uint8List? _image;
+  Uint8List? _audio;
 
   @override
   void initState() {
     super.initState();
-    _catalog = buildAegisCatalog();
-    _controller = genui.SurfaceController(catalogs: [_catalog]);
-    _replay();
+    _loadAttachments();
   }
 
-  Future<void> _replay() async {
-    // Re-publish the report's saved attachments to the global
-    // evidence sink BEFORE the IncidentReportCard mounts. The card's
-    // `_EvidenceBlock` reads from `AssistantCubit.evidenceSink` (a
-    // top-level ValueNotifier — see AssistantCubit for why we don't
-    // use a BlocProvider here), and that sink is in-memory only,
-    // empty after a hot-restart. Loading the persisted bytes here
-    // means opening a saved report repopulates the image + voice
-    // chips identically to the moment it was confirmed.
-    await _hydrateEvidenceFromReport();
-
-    final input = StreamController<String>();
-    _input = input;
-    final textBuffer = StringBuffer();
-    _sub = input.stream
-        .transform(const genui.A2uiParserTransformer())
-        .listen((event) {
-      if (event is genui.A2uiMessageEvent) {
-        if (_surfaceId == null && event.message is genui.CreateSurface) {
-          _surfaceId = (event.message as genui.CreateSurface).surfaceId;
-          if (mounted) setState(() {});
-        }
-        _controller.handleMessage(event.message);
-      } else if (event is genui.TextEvent) {
-        textBuffer.write(event.text);
-      }
-    });
-    input.add(widget.report.rawLlmOutput);
-    await input.close();
-    await _sub?.asFuture<void>();
-    if (mounted) {
-      setState(() => _replayedText = textBuffer.toString().trim());
-    }
-  }
-
-  Future<void> _hydrateEvidenceFromReport() async {
+  Future<void> _loadAttachments() async {
     final r = widget.report;
     Uint8List? image;
     Uint8List? audio;
-    final imagePath = r.imagePath;
-    final audioPath = r.audioPath;
     try {
-      if (imagePath != null && imagePath.isNotEmpty) {
-        final f = File(imagePath);
+      final p = r.imagePath;
+      if (p != null && p.isNotEmpty) {
+        final f = File(p);
         if (await f.exists()) image = await f.readAsBytes();
       }
     } on Object catch (e) {
       debugPrint('[Aegis][ReportDetail] image load failed: $e');
     }
     try {
-      if (audioPath != null && audioPath.isNotEmpty) {
-        final f = File(audioPath);
+      final p = r.audioPath;
+      if (p != null && p.isNotEmpty) {
+        final f = File(p);
         if (await f.exists()) audio = await f.readAsBytes();
       }
     } on Object catch (e) {
       debugPrint('[Aegis][ReportDetail] audio load failed: $e');
     }
-    AssistantCubit.evidenceSink.value = AssistantEvidenceSnapshot(
-      image: image,
-      audio: audio,
-      text: r.userText,
-    );
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    _input?.close();
-    _controller.dispose();
-    super.dispose();
+    if (!mounted) return;
+    setState(() {
+      _image = image;
+      _audio = audio;
+    });
   }
 
   @override
@@ -276,6 +222,7 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
     final time = DateFormat.yMMMd()
         .add_jm()
         .format(widget.report.createdAt.toLocal());
+    final decoded = widget.report.report;
     return Scaffold(
       appBar: AppBar(title: const Text('Report')),
       body: SafeArea(
@@ -302,13 +249,26 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'You: "${widget.report.userText}"',
+                      widget.report.userText.isEmpty
+                          ? 'You: (no spoken text — evidence attached)'
+                          : 'You: "${widget.report.userText}"',
                       style: const TextStyle(fontSize: 14, height: 1.35),
                     ),
                   ],
                 ),
               ),
-              if (_replayedText.isNotEmpty) ...[
+              if (_image != null && _image!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(_image!),
+                ),
+              ],
+              if (_audio != null && _audio!.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                AegisAudioChip(wavBytes: _audio!),
+              ],
+              if (widget.report.assistantText.isNotEmpty) ...[
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -316,40 +276,29 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+                      color:
+                          AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
                     ),
                   ),
                   child: Text(
-                    _replayedText,
+                    widget.report.assistantText,
                     style: const TextStyle(fontSize: 14, height: 1.35),
                   ),
                 ),
               ],
               const SizedBox(height: 16),
-              if (_surfaceId == null)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 32),
+              if (decoded == null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 32),
                   child: Center(
                     child: Text(
-                      '(no surface to replay — text-only report)',
+                      '(legacy report — no structured payload)',
                       style: TextStyle(color: AegisColors.onSurfaceMuted),
                     ),
                   ),
                 )
               else
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
-                    ),
-                  ),
-                  child: genui.Surface(
-                    surfaceContext: _controller.contextFor(_surfaceId!),
-                  ),
-                ),
+                TriageReportCard(report: decoded),
             ],
           ),
         ),

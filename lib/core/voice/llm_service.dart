@@ -171,19 +171,18 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
     },
     'body': <String, Object?>{
       'type': 'string',
+      'minLength': 600,
       'description':
-          'Filled report body, 400-1500 chars. Use the picked format\'s native section labels (NOT freeform). Structure: each section heading on its own UPPERCASE line, followed by `Label: value` lines. Use real newlines (\\n). Fields you do not know: "0 reported" for counts, "[INFERRED — verify before submission]" only for genuinely guessed text. DO NOT include sections for: title, severity, summary, immediate_actions, GPS coordinates, hazard_type, casualty_status, casualty_count, fema_scale, hazus_category, recommended_skill — those live in separate top-level fields and the UI renders them above this body. Stay focused on situation narrative, public counts, structures, response, outlook. ICS-209 skeleton (use this exact section pattern):\n"SITUATION\\nIncident Type: ...\\nDate/Time: ...\\nNarrative: ...\\n\\nPUBLIC IMPACT\\nFatal: 0 reported\\nInjured: 0 reported\\nMissing: 0 reported\\nDisplaced: 0 reported\\n\\nSTRUCTURES\\nThreatened: 0\\nDamaged: 0\\nDestroyed: 0\\n\\nRESPONSE\\nResources deployed: ...\\nGaps: ...\\n\\nOUTLOOK\\nProjected activity: ..."',
+          'Detailed report body, 800-1800 chars. Five uppercase section headings on their own lines, each followed by 2-5 substantive `Label: value` rows. NEVER leave a row as a bare "0 reported" or "[INFERRED]" placeholder — instead OBSERVE and INFER from the evidence:\n\n• SITUATION — write 2-3 sentence narrative grounded in image/audio observations. Include scene layout, visible hazards, weather/light conditions, time of day cues, scale of impact.\n• PUBLIC IMPACT — for each of Fatal / Injured / Missing / Displaced: if the evidence supports a number, write it ("3 visible"). If not visible but the situation type suggests likely impact, qualify with "estimated" or "likely" ("Injured: ~5 estimated based on collapse footprint"). Only write "0 reported" when the scene genuinely shows no impact.\n• STRUCTURES — count visible Threatened / Damaged / Destroyed buildings from the image. Add construction-type detail ("Damaged: 12 single-storey residential; mixed timber/masonry").\n• RESPONSE — describe Resources Deployed (responders visible, vehicles on scene, equipment) and Gaps (what is clearly missing: "no heavy lift equipment visible", "no triage tent identified"). Use what the image actually shows, not zeros.\n• OUTLOOK — Projected Activity over next 6-24h, specific Concerns the responder should plan for (aftershock risk, secondary collapse, weather worsening). Always include a time horizon.\n\nNEVER include sections for: title, severity, summary, immediate_actions, GPS, date/time, hazard_type, casualty_status, casualty_count, fema_scale, hazus_category, recommended_skill — those live in separate fields. Stay focused on rich situational detail.\n\nExample SITUATION row:\nNarrative: Aerial view of a tightly-packed coastal neighbourhood after typhoon landfall. Roof failures dominate the foreground; debris flow runs east-west across the main road. Daylight, partial overcast — search teams operating without artificial light.\n\nExample STRUCTURES row:\nDamaged: ~30 single-storey timber-frame homes; partial roof loss\nDestroyed: 4 corner-lot houses, slab-only remaining\n\nExample RESPONSE row:\nResources deployed: 1 ambulance, 6 high-vis responders, 1 utility truck on the access road\nGaps: no heavy-lift / crane equipment visible; no triage tent identified; no fire suppression on scene',
     },
-    'prepared_at': <String, Object?>{
-      'type': 'string',
-      'description':
-          'ISO-8601 UTC timestamp from the user prompt\'s "Captured at:" line. Copy verbatim.',
-    },
-    'gps': <String, Object?>{
-      'type': 'string',
-      'description':
-          'Copy the user prompt\'s "gps=" line EXACTLY, character-for-character, including ALL digits before AND after the decimal point. Do not drop leading digits. Do not round. Do not invent a value. If no "gps=" line exists in the user prompt, return an empty string. Example input "gps=lat=19.20337, lng=72.82770 (±15m)" → output "lat=19.20337, lng=72.82770 (±15m)".',
-    },
+    // NB: `gps` and `prepared_at` are intentionally NOT exposed to the
+    // model. We saw the model drop leading digits ("19.20337" →
+    // "9.20337"), invent latitudes, and emit mangled timestamps
+    // ("206-0-12011110557Z") even with verbatim-copy instructions.
+    // Both fields are deterministic — the device already knows them —
+    // so we inject ground truth in [_finaliseReport] after the tool
+    // call returns. Keeps these fields 100% accurate, removes the
+    // hallucination surface, and frees up decode tokens.
     'hazus_category': <String, Object?>{
       'type': 'integer',
       'description':
@@ -246,7 +245,6 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
     'summary',
     'body',
     'immediate_actions',
-    'prepared_at',
   ],
 };
 
@@ -490,6 +488,12 @@ class LlmService {
     // chat history doesn't poison the persistent Ask chat. Tear the
     // chat down first to free the model's single session slot.
     await _disposeChat();
+    // Snapshot ground-truth values BEFORE the LLM runs so the
+    // post-process injection uses the moment-of-capture timestamp,
+    // not whenever the engine happens to return.
+    final capturedAt =
+        '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
+    final groundGps = input.gpsContext ?? '';
     final model = await _ensureModel(maxTokens: maxTokens);
     final systemPrompt = await _buildTriageSystemPrompt();
     final userPrompt = _buildTriageUserPrompt(input);
@@ -512,7 +516,7 @@ class LlmService {
       // tokens inside `immediate_actions` — sampler kept picking the
       // same low-prob continuation. Slightly higher temp gives the
       // model enough room to commit to real action strings.
-      temperature: 0.7,
+      temperature: 0.3,
       topK: 40,
       topP: 0.9,
       supportImage: input.hasImage,
@@ -554,7 +558,9 @@ class LlmService {
           'elapsedMs=${genSw.elapsedMilliseconds}',
         );
       }
-      return _parseToolResponse(response);
+      final parsed = _parseToolResponse(response);
+      if (parsed == null) return null;
+      return _finaliseReport(parsed, capturedAt: capturedAt, gps: groundGps);
     } finally {
       try {
         await chat.close();
@@ -562,6 +568,72 @@ class LlmService {
         // best-effort
       }
     }
+  }
+
+  /// Stamp deterministic fields onto the model's tool output. The
+  /// device already knows the timestamp and GPS — letting the model
+  /// echo them just adds a hallucination surface (we saw dropped
+  /// leading digits and mangled ISO strings). Also sanitizes
+  /// `immediateActions` and clips obviously-truncated text.
+  TriageReport _finaliseReport(
+    TriageReport r, {
+    required String capturedAt,
+    required String gps,
+  }) {
+    final cleanedActions = <String>[];
+    for (final raw in r.immediateActions) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) continue;
+      if (trimmed.length < 4) continue;
+      // Pure punctuation / escape leakage.
+      if (RegExp(r'^[\p{P}\p{S}\s]+$', unicode: true).hasMatch(trimmed)) {
+        continue;
+      }
+      cleanedActions.add(trimmed);
+    }
+
+    String trimTrailingGarbage(String s) {
+      var out = s.trim();
+      // Strip stray closing quote/curly tokens the model sometimes
+      // appends when it runs out of decode budget mid-string.
+      while (out.isNotEmpty &&
+          (out.endsWith('"') ||
+              out.endsWith("'") ||
+              out.endsWith('“') ||
+              out.endsWith('”'))) {
+        out = out.substring(0, out.length - 1).trimRight();
+      }
+      // "…" ellipsis truncation marker → drop.
+      out = out.replaceAll(RegExp(r'…+$'), '').trimRight();
+      return out;
+    }
+
+    return TriageReport(
+      format: r.format,
+      title: trimTrailingGarbage(r.title),
+      severity: r.severity,
+      summary: trimTrailingGarbage(r.summary),
+      body: trimTrailingGarbage(r.body),
+      immediateActions: cleanedActions,
+      // OVERRIDE: ground truth from device, not model.
+      preparedAt: capturedAt,
+      preparedBy: 'Aegis Triage Auto-Draft',
+      hazardType: r.hazardType,
+      hazusCategory: r.hazusCategory,
+      femaScale: r.femaScale,
+      damageDescription: r.damageDescription == null
+          ? null
+          : trimTrailingGarbage(r.damageDescription!),
+      casualtyStatus: r.casualtyStatus,
+      casualtyCount: r.casualtyCount,
+      casualtyTriageColor: r.casualtyTriageColor,
+      // OVERRIDE: GPS comes from device sensor, not model.
+      gps: gps.isEmpty ? null : gps,
+      recommendedSkill: r.recommendedSkill,
+      spokenSummary: r.spokenSummary == null
+          ? null
+          : trimTrailingGarbage(r.spokenSummary!),
+    );
   }
 
   TriageReport? _parseToolResponse(ModelResponse response) {
@@ -819,18 +891,31 @@ You are Aegis, an offline emergency triage assistant. $speakRule
 Call the `render_triage_report` tool exactly ONCE per turn. No prose, no
 explanations, no extra tool calls.
 
-Ground every field in the user's evidence:
-- Image attached → fill `damage_description`, `hazus_category`,
-  `fema_scale`.
-- Voice/text mentions a person → fill `casualty_status`,
-  `casualty_count`, `casualty_triage_color`.
-- `gps` field: copy the user prompt's `gps=` line verbatim, or empty
-  string if absent.
-- `prepared_at`: copy the `Captured at:` ISO timestamp verbatim.
+Be a careful observer. Triage reports are decision-grade — empty
+placeholders are useless. For every field:
 
-Never invent locations, coordinates, names, or numbers. If unknown:
-"0 reported" for counts, `[INFERRED — verify before submission]` for
-guessed text fields.
+1. OBSERVE — describe exactly what the image and audio reveal: count
+   visible structures, identify hazards, note responder presence,
+   weather, light, debris pattern.
+2. INFER — when something isn't directly visible but the scene
+   implies it, write the inference WITH a confidence hedge:
+   "approximately", "estimated", "likely", "based on the collapse
+   footprint". Use ranges ("3-5") rather than bare zeros.
+3. REPORT — only fall back to "0 reported" when the scene genuinely
+   contains zero of that thing (e.g. no fire at a flood scene).
+
+NEVER write GPS coordinates, latitude/longitude numbers, or timestamps
+anywhere — the app injects those from device sensors. Do not include
+"lat=", "lng=", "GPS", "Date/Time", or ISO-8601 timestamps.
+
+NEVER emit `[INFERRED — verify before submission]`, `[UNKNOWN]`, or
+any bracketed placeholder. Write a real value (with a hedge if
+needed). The responder will edit at confirm time.
+
+Image attached → grade damage: fill `damage_description` (2-3 sentence
+forensic observation), `hazus_category`, `fema_scale`.
+Voice/text mentions a person → fill `casualty_status`,
+`casualty_count`, `casualty_triage_color`.
 
 Skills (set `recommended_skill` if matching):
 - intake-survivor-statement — trapped / injured person interview
@@ -850,14 +935,16 @@ Skills (set `recommended_skill` if matching):
         ? '(no spoken text — see attached evidence)'
         : input.userText.trim();
     buf.writeln('User: $user');
-    final nowIso =
-        '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
-    buf.writeln('Captured at: $nowIso');
 
+    // Deliberately omit raw GPS and capture timestamps from the prompt.
+    // The app injects them post-tool-call from device sensors so the
+    // model can't hallucinate or drop digits. Keeping them out of the
+    // prompt also stops the model from echoing mangled copies inside
+    // the body.
     final evidence = <String>[];
     if (input.hasAudio) evidence.add('audio attached');
     if (input.hasImage) evidence.add('image attached');
-    if (input.gpsContext != null) evidence.add('gps=${input.gpsContext}');
+    if (input.gpsContext != null) evidence.add('gps fix present');
     if (evidence.isNotEmpty) buf.writeln('Evidence: ${evidence.join(', ')}');
 
     if (input.incidentLog.isNotEmpty) {

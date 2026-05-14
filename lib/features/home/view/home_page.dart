@@ -497,7 +497,6 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (!isSystemTurn) ...[
                   _Bubble(
                     label: 'You',
                     text: turn.user,
@@ -507,7 +506,6 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                     audio: turn.userAudio,
                   ),
                   const SizedBox(height: 12),
-                ],
                 _Bubble(
                   label: 'Aegis',
                   text: turn.assistant,

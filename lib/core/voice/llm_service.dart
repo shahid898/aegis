@@ -4,11 +4,15 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
 
+import '../places/map_view_query.dart';
 import '../skills/skills_registry.dart';
 import 'model_pack.dart';
 import 'model_registry.dart';
 import 'triage_input.dart';
 import 'triage_report.dart';
+
+export '../places/map_view_query.dart' show ChatStreamEvent, ChatTextChunk,
+    ChatMapCall, MapViewQuery;
 
 /// Persistence port for the hardware-fallback sentinels owned by
 /// [LlmService]. Lives behind an interface so the LLM core never
@@ -315,6 +319,64 @@ final Tool _renderTriageReportTool = const Tool(
   description:
       'Render a structured incident report card and read out an optional spoken summary. Call exactly once per triage turn. Pick fields from the user\'s evidence (text, photo, audio, GPS). Do not invent locations or identifiers absent from the input.',
   parameters: _triageToolSchema,
+);
+
+/// JSON Schema for the chat-path `render_map_view` tool. Mirrors the
+/// `find-nearby-places` skill: a closed-vocabulary list of categories
+/// plus a search radius and a short spoken summary. The Flutter layer
+/// resolves the actual GPS / region centre and runs the offline POI
+/// query — the model only commits to *intent*.
+const Map<String, Object?> _mapViewToolSchema = <String, Object?>{
+  'type': 'object',
+  'properties': <String, Object?>{
+    'categories': <String, Object?>{
+      'type': 'array',
+      'description':
+          'POI categories to look for. Pick one or more from the closed list. Use multiple when the user is vague ("find help") — default to shelter+hospital+water_point in that case.',
+      'minItems': 1,
+      'maxItems': 5,
+      'items': <String, Object?>{
+        'type': 'string',
+        'enum': <String>[
+          'shelter',
+          'hospital',
+          'clinic',
+          'pharmacy',
+          'water_point',
+          'food_distribution',
+          'fuel_station',
+          'atm',
+          'police',
+          'fire_station',
+          'charging_point',
+          'connectivity_point',
+        ],
+      },
+    },
+    'radius_km': <String, Object?>{
+      'type': 'number',
+      'description':
+          'Search radius in kilometres. 2-10 km typical. Use the smaller end for water/ATM/pharmacy, larger for shelter/hospital.',
+      'minimum': 1,
+      'maximum': 50,
+    },
+    'spoken_summary': <String, Object?>{
+      'type': 'string',
+      'description':
+          'One short sentence the TTS reads aloud while the map mounts. Examples: "Showing the nearest shelters.", "Three open hospitals nearby — closest is 1.2 km away." Keep under 25 words.',
+    },
+  },
+  'required': <String>['categories', 'spoken_summary'],
+};
+
+/// Chat-path tool. Gemma 4 calls this when the user asks about nearby
+/// critical facilities; the cubit resolves location + POIs from the
+/// offline DB and pins an inline map card onto the conversation turn.
+final Tool _renderMapViewTool = const Tool(
+  name: 'render_map_view',
+  description:
+      'Render an inline map showing nearby disaster-critical places (shelter, hospital, water, pharmacy, fuel, etc.). Call when the user asks where to go, where to find help, or names a category from the enum below. The app already knows the user\'s location and the offline POI database — never invent place names, addresses, or coordinates.',
+  parameters: _mapViewToolSchema,
 );
 
 /// Wraps flutter_gemma's modern API so the rest of the app can treat
@@ -690,9 +752,19 @@ class LlmService {
     }
   }
 
-  /// Stream a response token-by-token. The returned stream finishes when
-  /// the model signals EOS.
-  Stream<String> askStream(String userText, {int maxTokens = 1024}) async* {
+  /// Stream a response as a mixed sequence of [ChatTextChunk] (text tokens
+  /// for the running TTS sentence flusher) and [ChatMapCall] (Gemma 4
+  /// emitted a `render_map_view` native function call). The stream
+  /// finishes when the model signals EOS.
+  ///
+  /// flutter_gemma 0.15.0's `Stream<ModelResponse>` already interleaves
+  /// `TextResponse` and `FunctionCallResponse` events from the same
+  /// session — we just translate types here so the cubit never has to
+  /// reach into the SDK.
+  Stream<ChatStreamEvent> askStream(
+    String userText, {
+    int maxTokens = 1024,
+  }) async* {
     try {
       yield* _askStreamOnce(userText, maxTokens: maxTokens);
     } on Object catch (e) {
@@ -1466,7 +1538,7 @@ Skills (set `recommended_skill` if matching):
     }
   }
 
-  Stream<String> _askStreamOnce(
+  Stream<ChatStreamEvent> _askStreamOnce(
     String userText, {
     required int maxTokens,
   }) async* {
@@ -1475,18 +1547,84 @@ Skills (set `recommended_skill` if matching):
     final wrapped = _buildUserTurnPrompt(userText);
     try {
       await chat.addQueryChunk(Message.text(text: wrapped, isUser: true));
-      yield* _sanitizeStream(
-        chat
-            .generateChatResponseAsync()
-            .where((r) => r is TextResponse)
-            .map((r) => (r as TextResponse).token)
-            .where((t) => t.isNotEmpty),
+
+      // The mixed Stream<ModelResponse> interleaves text tokens and tool
+      // calls. Split into two pipes:
+      //   • text → _sanitizeStream (think-block + echo strip) → ChatTextChunk
+      //   • FunctionCallResponse / ParallelFunctionCallResponse → ChatMapCall
+      //
+      // We use a broadcast controller + a relay coroutine because text
+      // sanitisation needs an upstream Stream<String> not a per-event
+      // callback.
+      final textController = StreamController<String>();
+      final mapEvents = <ChatMapCall>[];
+      var relayDone = false;
+
+      Future<void> relay() async {
+        try {
+          await for (final response
+              in chat.generateChatResponseAsync()) {
+            if (response is TextResponse) {
+              final token = response.token;
+              if (token.isNotEmpty) textController.add(token);
+            } else if (response is FunctionCallResponse) {
+              final call = _toMapCall(response);
+              if (call != null) mapEvents.add(call);
+            } else if (response is ParallelFunctionCallResponse) {
+              for (final call in response.calls) {
+                final mapped = _toMapCall(call);
+                if (mapped != null) mapEvents.add(mapped);
+              }
+            }
+          }
+        } finally {
+          relayDone = true;
+          await textController.close();
+        }
+      }
+
+      unawaited(relay());
+
+      await for (final chunk in _sanitizeStream(
+        textController.stream,
         userText: userText,
-      );
+      )) {
+        yield ChatTextChunk(chunk);
+        // Drain any tool calls that fired between text chunks so the UI
+        // can paint the inline map as soon as Gemma commits to it.
+        while (mapEvents.isNotEmpty) {
+          yield mapEvents.removeAt(0);
+        }
+      }
+
+      // Flush any tool calls that arrived after the last text chunk
+      // (common when the model emits text then tool-call as the final
+      // sequence, or skips text entirely).
+      while (!relayDone) {
+        await Future<void>.delayed(const Duration(milliseconds: 8));
+      }
+      while (mapEvents.isNotEmpty) {
+        yield mapEvents.removeAt(0);
+      }
     } on Object {
       await _disposeChat();
       rethrow;
     }
+  }
+
+  /// Convert a flutter_gemma `FunctionCallResponse` into a [ChatMapCall]
+  /// when its name matches the chat-path tool. Returns null for unknown
+  /// tools so the cubit can ignore them safely.
+  ChatMapCall? _toMapCall(FunctionCallResponse response) {
+    if (response.name != _renderMapViewTool.name) return null;
+    final args = _coerceArgs(response.args);
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] askStream tool=${response.name} '
+        'argKeys=${args.keys.toList()}',
+      );
+    }
+    return ChatMapCall(MapViewQuery.fromArgs(args));
   }
 
   String _buildUserTurnPrompt(String userText) {
@@ -1591,10 +1729,15 @@ Instructions:
       temperature: 1.0,
       topK: 64,
       topP: 0.95,
-      // Ask path does not need tools — pure chat. ToolChoice defaults
-      // to auto but with an empty `tools: []` list the SDK never
-      // injects any tool prompt or routes the response through the
-      // function-call parser.
+      // Agentic chat: expose `render_map_view` so Gemma 4 can pin an
+      // inline map onto the turn when the user asks about nearby
+      // shelters / hospitals / water / etc. ToolChoice.auto means the
+      // model can still emit plain text for non-places turns. Triage
+      // uses its own one-shot session with `render_triage_report` so
+      // the two surfaces never collide.
+      supportsFunctionCalls: true,
+      tools: <Tool>[_renderMapViewTool],
+      toolChoice: ToolChoice.auto,
       isThinking: false,
       modelType: ModelType.gemma4,
       systemInstruction: _buildSystemPrompt(

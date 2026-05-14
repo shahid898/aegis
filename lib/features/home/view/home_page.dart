@@ -16,6 +16,8 @@ import '../../../core/alert/alert_bridge.dart';
 import '../../../core/alert/alert_event.dart';
 import '../../../core/constants/languages.dart';
 import '../../../core/di/injection.dart';
+import '../../../core/places/places_repository.dart';
+import '../../places/widgets/inline_map_card.dart';
 import '../../../models/language_option.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
@@ -55,6 +57,7 @@ class HomePage extends StatelessWidget {
         languageCode: languageCode,
         storage: sl<StorageService>(),
         briefingSink: sl<AlertBriefingSink>(),
+        places: sl<PlacesRepository>(),
       ),
       child: const _HomeView(),
     );
@@ -521,6 +524,20 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                 if (turn.report != null) ...[
                   const SizedBox(height: 12),
                   TriageReportCard(report: turn.report!),
+                ],
+                if (turn.hasMap) ...[
+                  const SizedBox(height: 12),
+                  InlineMapCard(
+                    query: turn.mapQuery!,
+                    places: turn.mapPlaces!,
+                    center: turn.mapCenter!,
+                    onCall: (phone) async {
+                      final uri = Uri(scheme: 'tel', path: phone);
+                      if (await canLaunchUrl(uri)) {
+                        await launchUrl(uri);
+                      }
+                    },
+                  ),
                 ],
               ],
             ),

@@ -594,6 +594,17 @@ class LlmService {
     required String capturedAt,
     required String gps,
   }) {
+    // Filter action items, dropping JSON-fragment leakage that the
+    // raw-fallback parser sometimes captures when Gemma 4's
+    // `<|"|>…<|"|>` escape pairs get unbalanced inside the array
+    // (e.g. items like `],severity:` or `summary:Flood inundation…`
+    // smuggled from neighbouring keys).
+    final leakedKey = RegExp(
+      r'^\s*[\]\}]?\s*(?:severity|summary|format|title|hazard_type|'
+      r'casualty_status|fema_scale|hazus_category|recommended_skill|'
+      r'spoken_summary|body|prepared_at|prepared_by|gps)\s*:',
+      caseSensitive: false,
+    );
     final cleanedActions = <String>[];
     for (final raw in r.immediateActions) {
       final trimmed = raw.trim();
@@ -603,6 +614,10 @@ class LlmService {
       if (RegExp(r'^[\p{P}\p{S}\s]+$', unicode: true).hasMatch(trimmed)) {
         continue;
       }
+      if (leakedKey.hasMatch(trimmed)) continue;
+      // Reject items containing braces / brackets / unescaped quotes —
+      // signs the parser stitched JSON syntax into the value.
+      if (trimmed.contains(RegExp(r'[\{\}\[\]]'))) continue;
       cleanedActions.add(trimmed);
     }
 
@@ -622,12 +637,49 @@ class LlmService {
       return out;
     }
 
+    // Sometimes the decoder degenerates and tail-spams `render_report()`
+    // / `render_triage_report()` over and over after the real call
+    // closes. Trim everything from the first occurrence so it doesn't
+    // leak into the body or summary.
+    String stripDegenerateTail(String s) {
+      final markers = <RegExp>[
+        RegExp(r'render_(?:triage_)?report\s*\(', caseSensitive: false),
+        RegExp(r'`{3,}', caseSensitive: false),
+        RegExp(r'(?:_report){4,}', caseSensitive: false),
+      ];
+      var cut = s.length;
+      for (final m in markers) {
+        final hit = m.firstMatch(s);
+        if (hit != null && hit.start < cut) cut = hit.start;
+      }
+      return cut == s.length ? s : s.substring(0, cut).trimRight();
+    }
+
+    // Severity must be one of the schema enum values. Empty / unknown
+    // → derive a safe non-INFO default from hazardType so the card's
+    // accent bar matches the analysis instead of looking benign.
+    String normaliseSeverity(String raw) {
+      const allowed = {'CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'INFO'};
+      final upper = raw.trim().toUpperCase();
+      if (allowed.contains(upper)) return upper;
+      return _severityFromHazard(r.hazardType);
+    }
+
+    final cleanedBody = trimTrailingGarbage(stripDegenerateTail(r.body));
+    final cleanedTitle = trimTrailingGarbage(stripDegenerateTail(r.title));
+    final cleanedSummary =
+        trimTrailingGarbage(stripDegenerateTail(r.summary));
+
     return TriageReport(
       format: r.format,
-      title: trimTrailingGarbage(r.title),
-      severity: r.severity,
-      summary: trimTrailingGarbage(r.summary),
-      body: trimTrailingGarbage(r.body),
+      title: cleanedTitle.isEmpty
+          ? _deriveTitle(r.hazardType, cleanedBody)
+          : cleanedTitle,
+      severity: normaliseSeverity(r.severity),
+      summary: cleanedSummary.isEmpty
+          ? _deriveSummary(cleanedBody)
+          : cleanedSummary,
+      body: cleanedBody,
       immediateActions: cleanedActions,
       // OVERRIDE: ground truth from device, not model.
       preparedAt: capturedAt,
@@ -637,7 +689,7 @@ class LlmService {
       femaScale: r.femaScale,
       damageDescription: r.damageDescription == null
           ? null
-          : trimTrailingGarbage(r.damageDescription!),
+          : trimTrailingGarbage(stripDegenerateTail(r.damageDescription!)),
       casualtyStatus: r.casualtyStatus,
       casualtyCount: r.casualtyCount,
       casualtyTriageColor: r.casualtyTriageColor,
@@ -646,8 +698,77 @@ class LlmService {
       recommendedSkill: r.recommendedSkill,
       spokenSummary: r.spokenSummary == null
           ? null
-          : trimTrailingGarbage(r.spokenSummary!),
+          : trimTrailingGarbage(stripDegenerateTail(r.spokenSummary!)),
     );
+  }
+
+  /// Pick the first informative sentence from the body as a card
+  /// subtitle. Used when the model omitted the `summary` field.
+  static String _deriveSummary(String body) {
+    if (body.isEmpty) return 'Triage report ready for review.';
+    // Skip uppercase section headings; grab the first label-value or
+    // narrative line.
+    for (final raw in body.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      // Heading line — all caps short — skip.
+      final letters = line.replaceAll(RegExp(r'[^A-Za-z]'), '');
+      if (letters.isNotEmpty &&
+          letters == letters.toUpperCase() &&
+          line.length < 32) {
+        continue;
+      }
+      // Strip leading label `Foo:` if present.
+      final colonIdx = line.indexOf(':');
+      final value = colonIdx >= 0 && colonIdx < 24
+          ? line.substring(colonIdx + 1).trim()
+          : line;
+      if (value.isEmpty) continue;
+      // Cap at one sentence / 180 chars.
+      final sentenceEnd = RegExp(r'[.!?]\s').firstMatch(value);
+      final out = sentenceEnd != null
+          ? value.substring(0, sentenceEnd.end - 1)
+          : value;
+      return out.length > 180 ? '${out.substring(0, 177)}…' : out;
+    }
+    return 'Triage report ready for review.';
+  }
+
+  /// Compose a title when the model omitted one. Falls back to the
+  /// hazard label in Title Case.
+  static String _deriveTitle(String? hazard, String body) {
+    final h = hazard?.trim();
+    if (h != null && h.isNotEmpty) {
+      return h
+          .replaceAll('_', ' ')
+          .toLowerCase()
+          .split(' ')
+          .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}')
+          .join(' ');
+    }
+    if (body.isEmpty) return 'Incident';
+    return 'Incident';
+  }
+
+  /// Map hazard class to a safe severity default. Used when the model
+  /// emitted an empty / invalid `severity` field. Bias toward higher
+  /// severity so the responder sees the accent bar — emergency triage
+  /// should never silently degrade to INFO.
+  static String _severityFromHazard(String? hazard) {
+    switch (hazard?.trim().toUpperCase()) {
+      case 'CASUALTY':
+      case 'MISSING_PERSON':
+      case 'FIRE':
+      case 'HAZMAT':
+        return 'CRITICAL';
+      case 'STRUCTURAL_DAMAGE':
+      case 'FLOOD':
+      case 'MEDICAL':
+      case 'EVACUATION':
+        return 'HIGH';
+      default:
+        return 'MODERATE';
+    }
   }
 
   TriageReport? _parseToolResponse(ModelResponse response) {

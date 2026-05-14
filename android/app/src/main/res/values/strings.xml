@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="alert_title">EMERGENCY</string>
+    <string name="alert_default_body">Emergency alert received. Open Aegis for details.</string>
+    <string name="alert_default_sender">Unknown source</string>
+    <string name="alert_open_app">Open Aegis</string>
+    <string name="alert_dismiss">Dismiss</string>
+    <string name="alert_auto_open_in">Opening Aegis in %1$ds…</string>
+    <string name="alert_auto_open_now">Opening Aegis…</string>
+</resources>

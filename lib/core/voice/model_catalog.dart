@@ -268,17 +268,36 @@ class ModelCatalog {
     rootDirName: 'gemma-4-e2b-it-litertlm',
     modelFile: ModelFile(relativePath: 'model.litertlm'),
     isArchive: false,
+    // Google's Gemma checkpoints on HuggingFace are gated behind the Gemma
+    // license. Users must accept the licence on the model page once and the
+    // app must forward an `Authorization: Bearer <hf-token>` on download.
+    requiresHfAuth: true,
   );
 
-  /// Global LLM list — reused in every region plan.
+  // ---------------------------------------------------------------------------
+  // Routing brain: NONE. We retired the FunctionGemma 270M router pack
+  // (`mobile_actions_q8_ekv1024.litertlm`) in favour of running the chat
+  // brain (Gemma 4 IT) in classifier mode via [LlmService.oneShot]. See
+  // [FunctionRouter] for the rationale: FunctionGemma is a general agentic
+  // tool-calling fine-tune that knows nothing about CAP/WEA disaster
+  // semantics and on-device escalated both real cyclone alerts and promo /
+  // drill SMS equally. Gemma 4 IT classifies disaster intent zero-shot.
+  //
+  // Removing the pack also removes a ~280 MB gated HuggingFace download
+  // from onboarding — one less HF_TOKEN gate the user can stumble on.
+  // ---------------------------------------------------------------------------
+
+  /// Global LLM list — reused in every region plan. Single LLM: the chat
+  /// brain doubles as the alert-routing classifier so onboarding only
+  /// downloads one model.
   static const List<VoiceModelPack> _llmAll = [_gemma4E2bIt];
 
   /// Global VAD list — reused in every region plan. Silero is tiny and
   /// language-agnostic so a single pack works everywhere.
   static const List<VoiceModelPack> _vadAll = [_sileroVad];
 
-  /// Public getter so UI code can describe the LLM download ahead of time
-  /// (size, display name) without depending on a specific region plan.
+  /// Public getter so UI code can describe the chat-LLM download ahead of
+  /// time (size, display name) without depending on a specific region plan.
   static VoiceModelPack get llmPack => _gemma4E2bIt;
 
   /// Public getter for the VAD pack used by every region plan.

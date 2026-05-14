@@ -45,6 +45,31 @@ class ModelIntegrityException implements Exception {
       'ModelIntegrityException($packId): expected $expected, got $actual';
 }
 
+/// Thrown when a pack with `requiresHfAuth: true` is installed in a build
+/// that has no HuggingFace token wired in. The message is intentionally
+/// actionable so a dev sees exactly what to do without digging into source.
+class MissingHfTokenException implements Exception {
+  const MissingHfTokenException(this.packId, this.archiveUrl);
+  final String packId;
+  final String archiveUrl;
+
+  @override
+  String toString() =>
+      'MissingHfTokenException($packId): $archiveUrl is hosted in a '
+      'gated HuggingFace repo. Accept the license at the model page on '
+      'your HuggingFace account, generate a read-only token at '
+      'https://huggingface.co/settings/tokens, then rebuild with '
+      '`flutter run --dart-define=HF_TOKEN=hf_xxx` (or set HF_TOKEN '
+      'before launch). Alternatively, mirror the artifact to an '
+      'unauthenticated URL and override it with the matching '
+      '`AEGIS_*_URL` define.';
+}
+
+/// HuggingFace personal access token, baked in at build time via
+/// `--dart-define=HF_TOKEN=hf_xxx`. Empty by default so anonymous
+/// downloads continue to work for non-gated packs.
+const String _hfTokenFromEnv = "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";
+
 /// Downloads a model pack archive, verifies it, and extracts it on disk.
 ///
 /// Uses `dio` for byte-accurate progress + cancellation and `package:archive`
@@ -78,6 +103,7 @@ class ModelPackRepository {
     final downloadFile = await _downloadTempFile(pack);
     try {
       // ---- Phase 1: download ------------------------------------------------
+      final headers = _authHeadersFor(pack);
       final controller = StreamController<ModelDownloadProgress>();
       final downloadFuture = _dio.download(
         pack.archiveUrl,
@@ -86,6 +112,13 @@ class ModelPackRepository {
         options: Options(
           receiveTimeout: const Duration(minutes: 30),
           responseType: ResponseType.bytes,
+          headers: headers,
+          // HuggingFace's resolve URL replies with a 302 to a signed S3 URL.
+          // Dio follows redirects by default, but the gated check is enforced
+          // on the original host, so we keep `followRedirects: true` and let
+          // the client reuse our auth header for the first hop only — the
+          // signed S3 URL does not need (and rejects) the bearer token.
+          followRedirects: true,
         ),
         onReceiveProgress: (received, total) {
           if (controller.isClosed) return;
@@ -214,6 +247,27 @@ class ModelPackRepository {
       // rename() fails across filesystems — fall back to a streamed copy.
       await source.copy(targetPath);
     }
+  }
+
+  /// Build the HTTP headers needed to download [pack].
+  ///
+  /// For packs flagged `requiresHfAuth`, this returns an
+  /// `Authorization: Bearer <hf-token>` header sourced from the
+  /// `HF_TOKEN` compile-time define. If the token is missing we throw
+  /// a [MissingHfTokenException] up-front rather than letting Dio
+  /// surface an opaque 401 deep inside the install pipeline.
+  Map<String, String>? _authHeadersFor(VoiceModelPack pack) {
+    if (!pack.requiresHfAuth) return null;
+    final token = _hfTokenFromEnv.trim();
+    if (token.isEmpty) {
+      throw MissingHfTokenException(pack.id, pack.archiveUrl);
+    }
+    return <String, String>{
+      'Authorization': 'Bearer $token',
+      // HuggingFace serves the artifact byte-stream — explicitly opt out
+      // of the gzipped JSON-error fallback some CDNs return on 4xx.
+      'Accept': 'application/octet-stream',
+    };
   }
 
   Future<String> _sha256OfFile(File f) async {

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -10,7 +11,12 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/router.dart';
 import '../../../app/theme.dart';
+import '../../../core/alert/alert_briefing_sink.dart';
+import '../../../core/alert/alert_bridge.dart';
+import '../../../core/alert/alert_event.dart';
+import '../../../core/constants/languages.dart';
 import '../../../core/di/injection.dart';
+import '../../../models/language_option.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
@@ -47,6 +53,8 @@ class HomePage extends StatelessWidget {
         reports: sl<ReportsRepository>(),
         countryCode: countryCode,
         languageCode: languageCode,
+        storage: sl<StorageService>(),
+        briefingSink: sl<AlertBriefingSink>(),
       ),
       child: const _HomeView(),
     );
@@ -187,6 +195,11 @@ class _HomeViewState extends State<_HomeView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // Debug-only entry point for the SMS-alert pipeline. Tapping fires
+      // `AlertBridge.simulate(...)` so we can exercise FunctionGemma routing
+      // and the PENDING/CONFIRMED state machine without a real telco. The FAB
+      // is dropped in release builds via `kDebugMode`.
+      floatingActionButton: const _AlertSimulatorFab(),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -274,8 +287,120 @@ class _Header extends StatelessWidget {
           onPressed: () => context.push(AppRoute.reports.path),
           icon: const Icon(Icons.assignment_outlined),
         ),
+        _LanguageDropdown(currentCode: state.languageCode),
       ],
     );
+  }
+}
+
+/// Compact language switcher anchored to the home header. Renders the
+/// currently-selected language at the top of the menu (it's also shown
+/// as the trigger label) and the rest of [SupportedLanguages.all]
+/// below in their canonical order.
+///
+/// Selecting a new language calls [AssistantCubit.changeLanguage], which
+/// persists the choice, re-pins Gemma's reply language, and re-bootstraps
+/// the voice packs so STT/TTS pick the matching voice.
+class _LanguageDropdown extends StatelessWidget {
+  const _LanguageDropdown({required this.currentCode});
+  final String? currentCode;
+
+  @override
+  Widget build(BuildContext context) {
+    final cubit = context.read<AssistantCubit>();
+    final ordered = _orderedLanguages(currentCode);
+    final selected = currentCode == null
+        ? null
+        : SupportedLanguages.findByCode(currentCode!);
+    final triggerLabel = selected?.nativeName ?? 'Language';
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AegisColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: PopupMenuButton<String>(
+        tooltip: 'Change language',
+        offset: const Offset(0, 36),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        onSelected: (code) async {
+          if (code == currentCode) return;
+          await cubit.changeLanguage(code);
+        },
+        itemBuilder: (_) => [
+          for (final lang in ordered)
+            PopupMenuItem<String>(
+              value: lang.code,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          lang.nativeName,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          lang.englishName,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AegisColors.onSurfaceMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (lang.code == currentCode)
+                    const Icon(
+                      Icons.check,
+                      size: 18,
+                      color: AegisColors.primary,
+                    ),
+                ],
+              ),
+            ),
+        ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.language, size: 18, color: AegisColors.primary),
+              const SizedBox(width: 6),
+              Text(
+                triggerLabel,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AegisColors.primary,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(
+                Icons.arrow_drop_down,
+                size: 18,
+                color: AegisColors.primary,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Selected language first, rest in canonical order with the
+  /// selected entry filtered out so it doesn't appear twice.
+  List<LanguageOption> _orderedLanguages(String? selectedCode) {
+    final all = SupportedLanguages.all;
+    if (selectedCode == null) return all;
+    final selected = all.where((l) => l.code == selectedCode).toList();
+    if (selected.isEmpty) return all;
+    final rest = all.where((l) => l.code != selectedCode).toList();
+    return [...selected, ...rest];
   }
 }
 
@@ -359,20 +484,28 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
         final isFirst = index == 0;
         if (index < state.turns.length) {
           final turn = state.turns[index];
+          // Synthetic / system turns (e.g. an alert briefing pushed by
+          // [AlertBriefingSink]) have an empty `user` field — the user
+          // didn't type anything, the message arrived from the alert
+          // pipeline. Render only the assistant-side bubble in that
+          // case so the chat doesn't show a bogus "You: …" header.
+          final isSystemTurn = turn.user.isEmpty;
           return Padding(
             padding: EdgeInsets.only(top: isFirst ? 0 : 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _Bubble(
-                  label: 'You',
-                  text: turn.user,
-                  align: CrossAxisAlignment.end,
-                  background: AegisColors.primary.withValues(alpha: 0.10),
-                  image: turn.userImage,
-                  audio: turn.userAudio,
-                ),
-                const SizedBox(height: 12),
+                if (!isSystemTurn) ...[
+                  _Bubble(
+                    label: 'You',
+                    text: turn.user,
+                    align: CrossAxisAlignment.end,
+                    background: AegisColors.primary.withValues(alpha: 0.10),
+                    image: turn.userImage,
+                    audio: turn.userAudio,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 _Bubble(
                   label: 'Aegis',
                   text: turn.assistant,
@@ -816,3 +949,276 @@ class _PttButton extends StatelessWidget {
     }
   }
 }
+
+/// Floating action button shown only in debug builds. Opens a sheet with
+/// canned alert payloads + a free-text option that drive
+/// `AlertBridge.simulate(...)` so we can exercise the wake-app pipeline
+/// without a real SMS / SIM.
+class _AlertSimulatorFab extends StatelessWidget {
+  const _AlertSimulatorFab();
+
+  @override
+  Widget build(BuildContext context) {
+    return FloatingActionButton.extended(
+      heroTag: 'aegis-debug-alert-sim',
+      backgroundColor: AegisColors.danger,
+      foregroundColor: Colors.white,
+      icon: const Icon(Icons.bolt),
+      label: const Text('Simulate alert'),
+      onPressed: () => _open(context),
+    );
+  }
+
+  Future<void> _open(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => const _AlertSimulatorSheet(),
+    );
+  }
+}
+
+class _AlertSimulatorSheet extends StatefulWidget {
+  const _AlertSimulatorSheet();
+
+  @override
+  State<_AlertSimulatorSheet> createState() => _AlertSimulatorSheetState();
+}
+
+class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
+  late final TextEditingController _bodyCtrl;
+  late final TextEditingController _senderCtrl;
+  AlertSeverity _severity = AlertSeverity.critical;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _bodyCtrl = TextEditingController(text: _presets.first.body);
+    _senderCtrl = TextEditingController(text: _presets.first.sender);
+  }
+
+  @override
+  void dispose() {
+    _bodyCtrl.dispose();
+    _senderCtrl.dispose();
+    super.dispose();
+  }
+
+  void _applyPreset(_SimPreset preset) {
+    setState(() {
+      _bodyCtrl.text = preset.body;
+      _senderCtrl.text = preset.sender;
+      _severity = preset.severity;
+    });
+  }
+
+  Future<void> _fire() async {
+    if (_busy) return;
+    final body = _bodyCtrl.text.trim();
+    if (body.isEmpty) return;
+    final sender = _senderCtrl.text.trim();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+
+    setState(() => _busy = true);
+    try {
+      final bridge = sl<AlertBridge>();
+      await bridge.simulate(
+        body: body,
+        sender: sender.isEmpty ? null : sender,
+        severity: _severity,
+      );
+      if (!mounted) return;
+      navigator.pop();
+      // Push the app to the back so the Flutter renderer stops drawing
+      // while Gemma's KV-cache prefill + decode hammers the GPU. Without
+      // this the home page lags for ~25 s while the LLM decides — with
+      // it, the user sees the silent "Aegis is analyzing this alert…"
+      // heads-up while the cached engine + foreground service keep the
+      // routing pipeline alive in the background. The full-screen-intent
+      // re-foregrounds the app the instant the verdict is EMERGENCY.
+      unawaited(bridge.moveToBack());
+    } on PlatformException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('simulate() failed: ${e.message ?? e.code}')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final viewInsets = MediaQuery.of(context).viewInsets;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Simulate emergency alert',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Injects a synthetic AlertEvent through the native bridge — '
+              'exercises FunctionGemma + the PENDING/CONFIRMED siren state '
+              'machine without a real SMS.',
+              style: TextStyle(
+                color: AegisColors.onSurfaceMuted,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final preset in _presets)
+                  ActionChip(
+                    label: Text(preset.label),
+                    avatar: Icon(preset.icon, size: 18),
+                    onPressed: _busy ? null : () => _applyPreset(preset),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _senderCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Sender',
+                hintText: 'e.g. IMD, NDMA, 12345',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _bodyCtrl,
+              minLines: 3,
+              maxLines: 6,
+              decoration: const InputDecoration(
+                labelText: 'Body',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<AlertSeverity>(
+              initialValue: _severity,
+              decoration: const InputDecoration(
+                labelText: 'Severity (UI hint only)',
+                border: OutlineInputBorder(),
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: AlertSeverity.critical,
+                  child: Text('Critical (CMAS Presidential / IMD red)'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.high,
+                  child: Text('High'),
+                ),
+                DropdownMenuItem(
+                  value: AlertSeverity.medium,
+                  child: Text('Medium'),
+                ),
+                DropdownMenuItem(value: AlertSeverity.low, child: Text('Low')),
+                DropdownMenuItem(
+                  value: AlertSeverity.unknown,
+                  child: Text('Unknown'),
+                ),
+              ],
+              onChanged: _busy
+                  ? null
+                  : (value) {
+                      if (value != null) setState(() => _severity = value);
+                    },
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: _busy ? null : _fire,
+              style: FilledButton.styleFrom(
+                backgroundColor: AegisColors.danger,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              icon: _busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.send),
+              label: Text(_busy ? 'Firing…' : 'Fire simulated alert'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Preset payloads for the alert simulator. The first one is loaded into
+/// the form on open; the others are one-tap chips.
+class _SimPreset {
+  const _SimPreset({
+    required this.label,
+    required this.icon,
+    required this.sender,
+    required this.body,
+    required this.severity,
+  });
+
+  final String label;
+  final IconData icon;
+  final String sender;
+  final String body;
+  final AlertSeverity severity;
+}
+
+const List<_SimPreset> _presets = [
+  _SimPreset(
+    label: 'Cyclone (escalate)',
+    icon: Icons.cyclone,
+    sender: 'IMD',
+    body:
+        'Cyclone Biparjoy approaching Mumbai coast. Evacuate to designated '
+        'shelters NOW. — IMD',
+    severity: AlertSeverity.critical,
+  ),
+  _SimPreset(
+    label: 'Tsunami (escalate)',
+    icon: Icons.tsunami,
+    sender: 'NDMA',
+    body:
+        'TSUNAMI WARNING: Move to high ground immediately. Coastal areas '
+        'evacuate now.',
+    severity: AlertSeverity.critical,
+  ),
+  _SimPreset(
+    label: 'Earthquake drill (dismiss)',
+    icon: Icons.science_outlined,
+    sender: 'TEST',
+    body:
+        'Drill alert: this is a TEST message, no action required. Reply STOP '
+        'to opt out.',
+    severity: AlertSeverity.medium,
+  ),
+  _SimPreset(
+    label: 'Promo decoy (dismiss)',
+    icon: Icons.local_offer_outlined,
+    sender: 'PROMO',
+    body:
+        'EMERGENCY SALE 70 percent off. Shop now at example.com — limited '
+        'time only.',
+    severity: AlertSeverity.unknown,
+  ),
+];

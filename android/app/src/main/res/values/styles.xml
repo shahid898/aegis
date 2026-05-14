@@ -15,4 +15,14 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+
+    <!-- Phase 2 wake-app: full-bleed lock-screen takeover theme. -->
+    <style name="Theme.Aegis.Alert" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <item name="android:statusBarColor">#7A0000</item>
+        <item name="android:navigationBarColor">#7A0000</item>
+    </style>
 </resources>

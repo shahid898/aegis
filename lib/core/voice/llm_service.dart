@@ -127,15 +127,22 @@ On every turn:
    readable on a phone in an emergency.
 ''';
 
-String _buildSystemPrompt(String? languageCode) {
+String _buildSystemPrompt(String? languageCode, {String? briefingContext}) {
   final code = languageCode?.toLowerCase();
   final name = code == null ? null : _languageNames[code];
   final rule = name == null
       ? 'Reply in the same language the user spoke.'
       : 'Always reply in $name. Do not switch to any other language even '
-          'if the user mixes English words. Use the native script for '
-          '$name (not romanized text).';
-  return _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
+            'if the user mixes English words. Use the native script for '
+            '$name (not romanized text).';
+  final base = _aegisSystemPromptTemplate.replaceFirst('{language_rule}', rule);
+  if (briefingContext == null || briefingContext.trim().isEmpty) return base;
+  // Append the briefing so the model knows what just happened — the
+  // user can then ask follow-ups ("what should I do?", "where is the
+  // nearest shelter?") without re-explaining the situation. Kept as a
+  // short addendum to avoid bloating prefill cost.
+  return '$base\n\nRecent emergency context (do not repeat verbatim): '
+      '${briefingContext.trim()}';
 }
 
 /// JSON Schema for the `render_triage_report` tool. Native function
@@ -316,12 +323,26 @@ class LlmService {
   final ModelRegistry _registry;
   final SkillsRegistry _skills;
 
-  VoiceModelPack? _pack;
+  // Single LLM role. We retired the FunctionGemma 270M router pack — the
+  // chat brain (Gemma 4 IT) doubles as the alert-routing classifier via
+  // [oneShot] (history-free fresh session). flutter_gemma 0.13.6 only
+  // allows one model loaded at a time, which is now a non-issue since
+  // there is only ever one pack.
+  VoiceModelPack? _chatPack;
+
+  // The pack the engine is currently loaded against (or about to be — set
+  // synchronously by [_activate], the heavy load happens lazily on the
+  // next [_ensureModel] call). When this is null, no role has been picked
+  // yet and [ask]/[oneShot] will throw.
+  VoiceModelPack? _activePack;
+
   InferenceModel? _model;
   InferenceChat? _chat;
   bool _installed = false;
   Future<void>? _loadFuture;
   String? _preferredLanguage;
+  String? _briefingContext;
+  Future<void> _oneShotChain = Future<void>.value();
 
   SkillsRegistry get skills => _skills;
 
@@ -329,16 +350,53 @@ class LlmService {
   /// permanently if a generation throws "Can not find OpenCL library".
   PreferredBackend _preferredBackend = PreferredBackend.gpu;
 
-  VoiceModelPack? get pack => _pack;
+  /// The pack the engine is currently loaded against (or about to be on
+  /// the next [ask]/[oneShot] call). Null until [setChatPack] / [setPack]
+  /// has been called.
+  VoiceModelPack? get pack => _activePack;
+
+  /// Convenience accessor.
+  VoiceModelPack? get chatPack => _chatPack;
 
   bool get isReady => _model != null;
 
-  void setPack(VoiceModelPack pack) {
+  /// Register the chat-role pack (typically the user-facing assistant
+  /// brain — Gemma 4 IT). Does not load the model nor activate the role —
+  /// call [useChat] (or the legacy [setPack]) to make this pack the active
+  /// one. Idempotent for repeated calls with the same pack id.
+  void setChatPack(VoiceModelPack pack) {
     if (pack.kind != ModelKind.llm) {
-      throw ArgumentError('LlmService.setPack requires an LLM pack');
+      throw ArgumentError('LlmService.setChatPack requires an LLM pack');
     }
-    if (_pack?.id == pack.id) return;
-    _pack = pack;
+    if (_chatPack?.id == pack.id) return;
+    _chatPack = pack;
+    // If the chat pack is currently active, swapping its identity means
+    // the engine needs reloading — drop everything cached.
+    if (_activePack?.id != pack.id && _activePack == _chatPack) {
+      _activate(pack);
+    }
+  }
+
+  /// Backward-compatible alias used by the chat surface (assistant cubit):
+  /// register [pack] as the chat brain AND activate it so the next
+  /// [ask] / [askStream] call loads it.
+  void setPack(VoiceModelPack pack) {
+    setChatPack(pack);
+    useChat();
+  }
+
+  /// Make the chat-role pack the active engine. No-op if it's already
+  /// active. The expensive engine reload happens lazily on the next
+  /// [ask] / [askStream] / [oneShot] call.
+  void useChat() => _activate(_chatPack);
+
+  /// Synchronous engine swap: replace [_activePack] and tear down anything
+  /// loaded against the old pack. Heavy work (download check + native
+  /// load) is deferred to the next [_ensureModel] call.
+  void _activate(VoiceModelPack? pack) {
+    if (pack == null) return;
+    if (_activePack?.id == pack.id) return;
+    _activePack = pack;
     _installed = false;
     _loadFuture = null;
     unawaited(_disposeModel());
@@ -352,9 +410,26 @@ class LlmService {
     _preferredLanguage = normalized;
     unawaited(_disposeChat());
   }
+  /// Pin a recent emergency-alert briefing into the chat brain's
+  /// system prompt as an addendum. The next chat session will be built
+  /// with the briefing appended after the base system prompt, so when
+  /// the user asks a follow-up ("what should I do?", "where is the
+  /// nearest shelter?") the model already has the disaster context
+  /// without the user re-explaining it. Pass `null` to clear.
+  ///
+  /// Tears down the cached chat so the new system prompt takes effect
+  /// — system prompt is prefilled at chat creation time.
+  void setBriefingContext(String? briefing) {
+    final normalized = briefing?.trim();
+    final next = (normalized == null || normalized.isEmpty) ? null : normalized;
+    if (_briefingContext == next) return;
+    _briefingContext = next;
+    unawaited(_disposeChat());
+  }
 
+  /// True if the currently-active pack is installed on disk.
   Future<bool> isAvailable() async {
-    final pack = _pack;
+    final pack = _activePack;
     if (pack == null) return false;
     return _registry.isInstalled(pack);
   }
@@ -452,6 +527,16 @@ class LlmService {
     return normalized;
   }
 
+  /// True if [pack] is installed on disk, regardless of which role is
+  /// currently active. The router uses this to gate routing on whether
+  /// the FunctionGemma pack is downloaded — if the router pack isn't
+  /// there yet, it returns an empty plan and the regex fallback fires.
+  Future<bool> isPackAvailable(VoiceModelPack pack) =>
+      _registry.isInstalled(pack);
+
+  /// Generate a full response for [userText]. Blocks until generation
+  /// finishes — prefer [askStream] for a responsive UI.
+
   Future<String> ask(String userText, {int maxTokens = 1024}) async {
     try {
       return await _askOnce(userText, maxTokens: maxTokens);
@@ -460,7 +545,109 @@ class LlmService {
       return _askOnce(userText, maxTokens: maxTokens);
     }
   }
+  /// Run a single, history-free prompt. The model is shared with [ask] /
+  /// [askStream] (LiteRT-LM only allows one engine in process), but the
+  /// underlying [InferenceModelSession] is built fresh and torn down at
+  /// the end of the call so nothing this method emits leaks into the
+  /// user-visible chat conversation. This is what the FunctionGemma
+  /// router uses to ask "given this alert, what should I do?" without
+  /// polluting the multi-turn dialogue Aegis is having with the user.
+  ///
+  /// [systemInstruction] is prepended to the prompt verbatim — pass an
+  /// empty string if you want raw user-only input.
+  Future<String> oneShot({
+    required String systemInstruction,
+    required String userPrompt,
+    int maxTokens = 1024,
+    double temperature = 0.2,
+    int topK = 40,
+    double topP = 0.95,
+  }) {
+    final completer = Completer<String>();
+    _oneShotChain = _oneShotChain
+        .catchError((Object error, StackTrace stackTrace) {
+      // Keep the chain alive after failures; otherwise one failed call
+      // can permanently block every later oneShot() waiter.
+    })
+        .then((_) async {
+      try {
+        final output = await _oneShotWithFallback(
+          systemInstruction: systemInstruction,
+          userPrompt: userPrompt,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          topK: topK,
+          topP: topP,
+        );
+        completer.complete(output);
+      } on Object catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
 
+  Future<String> _oneShotWithFallback({
+    required String systemInstruction,
+    required String userPrompt,
+    required int maxTokens,
+    required double temperature,
+    required int topK,
+    required double topP,
+  }) async {
+    try {
+      return await _oneShotOnce(
+        systemInstruction: systemInstruction,
+        userPrompt: userPrompt,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topK: topK,
+        topP: topP,
+      );
+    } on Object catch (e) {
+      if (!await _shouldFallbackToCpu(e)) rethrow;
+      return _oneShotOnce(
+        systemInstruction: systemInstruction,
+        userPrompt: userPrompt,
+        maxTokens: maxTokens,
+        temperature: temperature,
+        topK: topK,
+        topP: topP,
+      );
+    }
+  }
+
+  Future<String> _oneShotOnce({
+    required String systemInstruction,
+    required String userPrompt,
+    required int maxTokens,
+    required double temperature,
+    required int topK,
+    required double topP,
+  }) async {
+    final model = await _ensureModel(maxTokens: maxTokens);
+    final trimmedSystem = systemInstruction.trim();
+    final session = await model.createSession(
+      temperature: temperature,
+      topK: topK,
+      topP: topP,
+      systemInstruction: trimmedSystem.isEmpty ? null : trimmedSystem,
+    );
+    try {
+      await session.addQueryChunk(Message.text(text: userPrompt, isUser: true));
+      final raw = await session.getResponse();
+      return _sanitizeFinalResponse(raw);
+    } finally {
+      try {
+        await session.close();
+      } on Object {
+        // best-effort — the underlying Conversation may already be gone.
+      }
+    }
+  }
+
+  /// Stream a response token-by-token. The returned stream finishes when
+  /// the model signals EOS.
   Stream<String> askStream(String userText, {int maxTokens = 1024}) async* {
     try {
       yield* _askStreamOnce(userText, maxTokens: maxTokens);
@@ -1285,7 +1472,10 @@ Instructions:
       // function-call parser.
       isThinking: false,
       modelType: ModelType.gemma4,
-      systemInstruction: _buildSystemPrompt(_preferredLanguage),
+      systemInstruction: _buildSystemPrompt(
+        _preferredLanguage,
+        briefingContext: _briefingContext,
+      ),
     );
     _chat = chat;
     if (kDebugMode) {
@@ -1298,6 +1488,115 @@ Instructions:
   }
 
   Future<void> resetSession() => _disposeChat();
+
+  /// Force the active model to load and run a single throw-away inference
+  /// so the LiteRT-LM engine, GPU shaders, and KV-cache prefill are paid
+  /// for *now* rather than on the first real alert.
+  ///
+  /// Cold-start of FunctionGemma 270M on a GPU device is dominated by
+  /// shader compile + KV warm-up — measured at 25–40 s on real hardware.
+  /// The AlertRouter's per-alert watchdog can't realistically budget for
+  /// that, so we burn the cost up-front (e.g. from `configureDependencies`
+  /// at boot) and treat any failure as non-fatal: the router will still
+  /// retry on the next alert, just on a cold engine.
+  ///
+  /// Caller is expected to have already pinned the desired role via
+  /// [useChat]. No-op if the active pack is missing or not
+  /// yet installed on disk.
+  ///
+  /// **Why every sampling parameter is exposed.** flutter_gemma's
+  /// LiteRT-LM engine bakes the FIRST session's sampling and budget
+  /// settings into permanent engine-level ceilings (`max_top_k`,
+  /// `max_tokens`, …). Subsequent sessions are silently clamped to
+  /// those ceilings. We observed this twice in production:
+  ///
+  ///   1. Warming up with `maxTokens: 64` locked the engine at 64 and
+  ///      the next router call with a 448-token prompt died at the
+  ///      JNI boundary with `Input token ids are too long. Exceeding
+  ///      the maximum number of tokens allowed: 448 >= 64`.
+  ///   2. Warming up with `topK: 1` (greedy) locked `max_top_k` at 1.
+  ///      The router asked for `topK: 40` but was silently clamped to
+  ///      greedy, FunctionGemma 270M then decoded into a degenerate
+  ///      region for ~20 seconds and returned an empty string —
+  ///      `[FunctionRouter] parsed 0 call(s) from 0 chars`.
+  ///
+  /// The defaults here mirror the **router's** sampling
+  /// ([FunctionRouter.route] uses `temperature: 0.2, topK: 40,
+  /// topP: 0.9, maxTokens: 1024`) so the engine's ceilings are sized
+  /// for the router's needs. Callers warming the chat brain should
+  /// override these to the chat sampling params instead.
+  Future<void> warmUp({
+    int maxTokens = 1024,
+    double temperature = 0.2,
+    int topK = 40,
+    double topP = 0.9,
+  }) async {
+    final pack = _activePack;
+    if (pack == null) {
+      if (kDebugMode) {
+        debugPrint('[LlmService] warm-up skipped: no active pack');
+      }
+      return;
+    }
+    if (!await _registry.isInstalled(pack)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] warm-up skipped: pack ${pack.id} not installed',
+        );
+      }
+      return;
+    }
+    final stopwatch = Stopwatch()..start();
+    try {
+      // We MUST decode at least one token here, not just create the
+      // session. Engine init + session create only loads weights — the
+      // first decode is what triggers OpenCL/WebGPU shader compilation
+      // (10–15 s on real Adreno/Mali) and the first KV-cache prefill on
+      // the GPU memory allocator. Without that, the first real alert
+      // routing call still pays the full cold-start tax (observed:
+      // 15 s prefill + 20 s decode = 35 s, exceeding the AlertRouter
+      // watchdog and dismissing real emergencies). Run the decode
+      // serialised through [_oneShotChain] so we don't race a real
+      // routing call.
+      _oneShotChain = _oneShotChain
+          .catchError((Object _, StackTrace _) {})
+          .then((_) async {
+            // CRITICAL: pass the SAME engine maxTokens the router uses
+            // (1024) so warm-up doesn't lock the cached engine at a
+            // small ceiling. [_ensureModel] keys cache by maxTokens —
+            // a tiny warm-up value (e.g. 8) would build an 8-token
+            // engine, then the next real alert (524-token prompt)
+            // throws "Input token ids are too long" because the
+            // engine was sized for 8.
+            final raw = await _oneShotWithFallback(
+              systemInstruction: '',
+              userPrompt: 'OK',
+              maxTokens: maxTokens,
+              temperature: temperature,
+              topK: topK,
+              topP: topP,
+            );
+            if (kDebugMode) {
+              debugPrint(
+                '[LlmService] warm-up decode produced ${raw.length} chars',
+              );
+            }
+          });
+      await _oneShotChain;
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] warm-up complete pack=${pack.id} '
+          'took=${stopwatch.elapsedMilliseconds}ms',
+        );
+      }
+    } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint(
+          '[LlmService] warm-up failed (non-fatal) pack=${pack.id}: $e\n$st',
+        );
+      }
+    }
+  }
 
   Future<void> _disposeChat() async {
     final chat = _chat;
@@ -1463,9 +1762,12 @@ Instructions:
   }
 
   Future<InferenceModel> _ensureModel({required int maxTokens}) async {
-    final pack = _pack;
+    final pack = _activePack;
     if (pack == null) {
-      throw StateError('LlmService.ask called before setPack()');
+      throw StateError(
+        'LlmService used before setChatPack — call useChat() (or the '
+        'legacy setPack) first',
+      );
     }
     if (!await _registry.isInstalled(pack)) {
       throw StateError('LLM pack ${pack.id} is not installed');

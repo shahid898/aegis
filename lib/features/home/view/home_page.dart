@@ -288,6 +288,12 @@ class _Header extends StatelessWidget {
           onPressed: () => context.push(AppRoute.reports.path),
           icon: const Icon(Icons.assignment_outlined),
         ),
+        const SizedBox(width: 2),
+        IconButton.filledTonal(
+          tooltip: 'Find nearby places',
+          onPressed: () => context.push(AppRoute.findPlaces.path),
+          icon: const Icon(Icons.map_outlined),
+        ),
         const SizedBox(width: 5),
         _LanguageDropdown(currentCode: state.languageCode),
       ],

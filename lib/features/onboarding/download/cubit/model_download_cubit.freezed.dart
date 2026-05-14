@@ -12,9 +12,9 @@ part of 'model_download_cubit.dart';
 // dart format off
 T _$identity<T>(T value) => value;
 /// @nodoc
-mixin _$ModelDownloadState {
+mixin _$ModelDownloadState implements DiagnosticableTreeMixin {
 
- List<VoiceModelPack> get plan; Set<String> get installedIds; DownloadStatus get status; VoiceModelPack? get currentPack; int get currentReceivedBytes; int get currentTotalBytes; String? get errorMessage;
+ List<VoiceModelPack> get plan; Set<String> get installedIds; DownloadStatus get status; VoiceModelPack? get currentPack; int get currentReceivedBytes; int get currentTotalBytes; String? get errorMessage; String get placesProgressMessage; int get placesCount;
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -22,19 +22,25 @@ mixin _$ModelDownloadState {
 $ModelDownloadStateCopyWith<ModelDownloadState> get copyWith => _$ModelDownloadStateCopyWithImpl<ModelDownloadState>(this as ModelDownloadState, _$identity);
 
 
+@override
+void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+  properties
+    ..add(DiagnosticsProperty('type', 'ModelDownloadState'))
+    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount));
+}
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ModelDownloadState&&const DeepCollectionEquality().equals(other.plan, plan)&&const DeepCollectionEquality().equals(other.installedIds, installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ModelDownloadState&&const DeepCollectionEquality().equals(other.plan, plan)&&const DeepCollectionEquality().equals(other.installedIds, installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(plan),const DeepCollectionEquality().hash(installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(plan),const DeepCollectionEquality().hash(installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount);
 
 @override
-String toString() {
-  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage)';
+String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
+  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount)';
 }
 
 
@@ -45,7 +51,7 @@ abstract mixin class $ModelDownloadStateCopyWith<$Res>  {
   factory $ModelDownloadStateCopyWith(ModelDownloadState value, $Res Function(ModelDownloadState) _then) = _$ModelDownloadStateCopyWithImpl;
 @useResult
 $Res call({
- List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage
+ List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount
 });
 
 
@@ -62,7 +68,7 @@ class _$ModelDownloadStateCopyWithImpl<$Res>
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,}) {
   return _then(_self.copyWith(
 plan: null == plan ? _self.plan : plan // ignore: cast_nullable_to_non_nullable
 as List<VoiceModelPack>,installedIds: null == installedIds ? _self.installedIds : installedIds // ignore: cast_nullable_to_non_nullable
@@ -71,7 +77,9 @@ as DownloadStatus,currentPack: freezed == currentPack ? _self.currentPack : curr
 as VoiceModelPack?,currentReceivedBytes: null == currentReceivedBytes ? _self.currentReceivedBytes : currentReceivedBytes // ignore: cast_nullable_to_non_nullable
 as int,currentTotalBytes: null == currentTotalBytes ? _self.currentTotalBytes : currentTotalBytes // ignore: cast_nullable_to_non_nullable
 as int,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,placesProgressMessage: null == placesProgressMessage ? _self.placesProgressMessage : placesProgressMessage // ignore: cast_nullable_to_non_nullable
+as String,placesCount: null == placesCount ? _self.placesCount : placesCount // ignore: cast_nullable_to_non_nullable
+as int,
   ));
 }
 
@@ -156,10 +164,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _ModelDownloadState() when $default != null:
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
   return orElse();
 
 }
@@ -177,10 +185,10 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)  $default,) {final _that = this;
 switch (_that) {
 case _ModelDownloadState():
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -197,10 +205,10 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)?  $default,) {final _that = this;
 switch (_that) {
 case _ModelDownloadState() when $default != null:
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
   return null;
 
 }
@@ -211,8 +219,8 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 /// @nodoc
 
 
-class _ModelDownloadState extends ModelDownloadState {
-  const _ModelDownloadState({required final  List<VoiceModelPack> plan, final  Set<String> installedIds = const <String>{}, this.status = DownloadStatus.idle, this.currentPack, this.currentReceivedBytes = 0, this.currentTotalBytes = 1, this.errorMessage}): _plan = plan,_installedIds = installedIds,super._();
+class _ModelDownloadState extends ModelDownloadState with DiagnosticableTreeMixin {
+  const _ModelDownloadState({required final  List<VoiceModelPack> plan, final  Set<String> installedIds = const <String>{}, this.status = DownloadStatus.idle, this.currentPack, this.currentReceivedBytes = 0, this.currentTotalBytes = 1, this.errorMessage, this.placesProgressMessage = '', this.placesCount = 0}): _plan = plan,_installedIds = installedIds,super._();
   
 
  final  List<VoiceModelPack> _plan;
@@ -234,6 +242,8 @@ class _ModelDownloadState extends ModelDownloadState {
 @override@JsonKey() final  int currentReceivedBytes;
 @override@JsonKey() final  int currentTotalBytes;
 @override final  String? errorMessage;
+@override@JsonKey() final  String placesProgressMessage;
+@override@JsonKey() final  int placesCount;
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
@@ -242,19 +252,25 @@ class _ModelDownloadState extends ModelDownloadState {
 _$ModelDownloadStateCopyWith<_ModelDownloadState> get copyWith => __$ModelDownloadStateCopyWithImpl<_ModelDownloadState>(this, _$identity);
 
 
+@override
+void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+  properties
+    ..add(DiagnosticsProperty('type', 'ModelDownloadState'))
+    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount));
+}
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ModelDownloadState&&const DeepCollectionEquality().equals(other._plan, _plan)&&const DeepCollectionEquality().equals(other._installedIds, _installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ModelDownloadState&&const DeepCollectionEquality().equals(other._plan, _plan)&&const DeepCollectionEquality().equals(other._installedIds, _installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_plan),const DeepCollectionEquality().hash(_installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_plan),const DeepCollectionEquality().hash(_installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount);
 
 @override
-String toString() {
-  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage)';
+String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
+  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount)';
 }
 
 
@@ -265,7 +281,7 @@ abstract mixin class _$ModelDownloadStateCopyWith<$Res> implements $ModelDownloa
   factory _$ModelDownloadStateCopyWith(_ModelDownloadState value, $Res Function(_ModelDownloadState) _then) = __$ModelDownloadStateCopyWithImpl;
 @override @useResult
 $Res call({
- List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage
+ List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount
 });
 
 
@@ -282,7 +298,7 @@ class __$ModelDownloadStateCopyWithImpl<$Res>
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,}) {
   return _then(_ModelDownloadState(
 plan: null == plan ? _self._plan : plan // ignore: cast_nullable_to_non_nullable
 as List<VoiceModelPack>,installedIds: null == installedIds ? _self._installedIds : installedIds // ignore: cast_nullable_to_non_nullable
@@ -291,7 +307,9 @@ as DownloadStatus,currentPack: freezed == currentPack ? _self.currentPack : curr
 as VoiceModelPack?,currentReceivedBytes: null == currentReceivedBytes ? _self.currentReceivedBytes : currentReceivedBytes // ignore: cast_nullable_to_non_nullable
 as int,currentTotalBytes: null == currentTotalBytes ? _self.currentTotalBytes : currentTotalBytes // ignore: cast_nullable_to_non_nullable
 as int,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,placesProgressMessage: null == placesProgressMessage ? _self.placesProgressMessage : placesProgressMessage // ignore: cast_nullable_to_non_nullable
+as String,placesCount: null == placesCount ? _self.placesCount : placesCount // ignore: cast_nullable_to_non_nullable
+as int,
   ));
 }
 

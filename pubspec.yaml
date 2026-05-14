@@ -109,6 +109,13 @@ dependencies:
   vibration: ^3.1.8
   wakelock_plus: ^1.4.0
 
+  # find-nearby-places skill: offline POI database (sqflite for indexed
+  # bbox + category queries) seeded at onboarding from OSM Overpass.
+  # http is used for the one-time Overpass POST during onboarding; all
+  # subsequent queries hit the local SQLite file.
+  sqflite: ^2.4.1
+  http: ^1.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -134,3 +141,4 @@ flutter:
     - assets/skills/intake-survivor-statement/
     - assets/skills/disaster-report-generator/
     - assets/skills/match-mesh-beacon/
+    - assets/skills/find-nearby-places/

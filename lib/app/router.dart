@@ -8,6 +8,7 @@ import '../features/onboarding/language/view/language_page.dart';
 import '../features/onboarding/permissions/view/permissions_page.dart';
 import '../features/onboarding/ready/view/ready_page.dart';
 import '../features/onboarding/region/view/region_page.dart';
+import '../features/places/view/find_nearby_places_page.dart';
 import '../features/reports/view/reports_page.dart';
 import '../features/splash/view/splash_page.dart';
 
@@ -21,7 +22,8 @@ enum AppRoute {
   permissions('/onboarding/permissions'),
   ready('/onboarding/ready'),
   home('/home'),
-  reports('/reports');
+  reports('/reports'),
+  findPlaces('/places');
 
   const AppRoute(this.path);
   final String path;
@@ -69,6 +71,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: AppRoute.reports.path,
       builder: (_, _) => const ReportsPage(),
+    ),
+    GoRoute(
+      path: AppRoute.findPlaces.path,
+      builder: (_, _) => const FindNearbyPlacesPage(),
     ),
   ],
 );

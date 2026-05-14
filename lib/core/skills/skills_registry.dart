@@ -31,6 +31,7 @@ class SkillsRegistry {
     'intake-survivor-statement',
     'disaster-report-generator',
     'match-mesh-beacon',
+    'find-nearby-places',
   ];
 
   final List<String> _skillIds;

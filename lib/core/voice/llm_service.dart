@@ -10,6 +10,22 @@ import 'model_registry.dart';
 import 'triage_input.dart';
 import 'triage_report.dart';
 
+/// Persistence port for the hardware-fallback sentinels owned by
+/// [LlmService]. Lives behind an interface so the LLM core never
+/// depends on `StorageService` directly — tests pass a stub.
+///
+/// The two flags are sticky escape hatches for devices where
+/// LiteRT-LM's GPU path corrupts the process-wide GL/CL context on
+/// failure (`clEnqueueMapBuffer -14`, `STABLEHLO_COMPOSITE failed to
+/// prepare`, `convert_tensor_buffer` reshape error). Once tripped,
+/// the next cold launch starts on the safe path.
+abstract interface class HardwareFallbackStore {
+  bool readForceCpu();
+  bool readDisableVision();
+  Future<void> persistForceCpu();
+  Future<void> persistDisableVision();
+}
+
 /// Reserved Gemma / LiteRT-LM tokens that should never appear in a final
 /// user-facing reply. Catches `<unused3>`, `<mask>`, leftover chat-template
 /// markers, etc.
@@ -317,11 +333,39 @@ final Tool _renderTriageReportTool = const Tool(
 /// `<|tool_call>…<tool_call|>` response back into a structured
 /// [FunctionCallResponse]. No Dart-side prompt engineering.
 class LlmService {
-  LlmService(this._registry, {SkillsRegistry? skills})
-      : _skills = skills ?? SkillsRegistry();
+  LlmService(
+    this._registry, {
+    SkillsRegistry? skills,
+    HardwareFallbackStore? hardwareStore,
+  })  : _skills = skills ?? SkillsRegistry(),
+        _hardwareStore = hardwareStore {
+    // Honor persisted GPU-failure sentinels at construction so the very
+    // first engine_create on this process boots on the safe path.
+    final store = _hardwareStore;
+    if (store != null) {
+      if (store.readForceCpu()) {
+        _preferredBackend = PreferredBackend.cpu;
+      }
+      if (store.readDisableVision()) {
+        _visionDisabled = true;
+      }
+    }
+  }
 
   final ModelRegistry _registry;
   final SkillsRegistry _skills;
+
+  /// Optional persistent flag store. When supplied, GPU / vision crashes
+  /// flip + persist a sentinel so the next cold launch starts on the
+  /// safe path. Decoupled from `StorageService` so the LLM core stays
+  /// independent of the Hive layer in tests.
+  final HardwareFallbackStore? _hardwareStore;
+
+  /// Session-scoped circuit breaker for the vision decoder. Once a
+  /// vision-decode crash fires we strip the image from subsequent
+  /// triage calls in the same process AND persist via
+  /// [_hardwareStore] so future launches skip vision too.
+  bool _visionDisabled = false;
 
   // Single LLM role. We retired the FunctionGemma 270M router pack — the
   // chat brain (Gemma 4 IT) doubles as the alert-routing classifier via
@@ -677,6 +721,21 @@ class LlmService {
       if (await _shouldFallbackToSmallerContext(e, maxTokens)) {
         return _generateReportOnce(input, maxTokens: 2048);
       }
+      if (await _shouldFallbackToTextOnly(e, input)) {
+        // Image decode crashed on this device's GPU. Strip vision and
+        // retry text-only so the responder still gets a report from the
+        // voice / text / GPS signals.
+        final downgraded = TriageInput(
+          userText: input.userText,
+          audioWav: input.audioWav,
+          imageJpeg: null,
+          gpsContext: input.gpsContext,
+          incidentLog: input.incidentLog,
+          activeRegionPackId: input.activeRegionPackId,
+          requestId: input.requestId,
+        );
+        return _generateReportOnce(downgraded, maxTokens: maxTokens);
+      }
       rethrow;
     }
   }
@@ -703,6 +762,57 @@ class LlmService {
     return true;
   }
 
+  /// LiteRT-LM occasionally crashes in `convert_tensor_buffer` /
+  /// `llm_litert_compiled_model_executor` when the vision decoder's
+  /// output tensor can't be reshaped on this device's GPU (Mali devices
+  /// with both OpenCL AND WebGPU samplers missing fall to CPU
+  /// sampling, which then trips up the vision-conditioned decoder).
+  /// When that happens, we tear the engine down and retry the SAME
+  /// triage turn with the image stripped — text + audio + GPS still
+  /// produce a usable report.
+  Future<bool> _shouldFallbackToTextOnly(
+    Object error,
+    TriageInput input,
+  ) async {
+    if (!input.hasImage) return false;
+    final message = error.toString();
+    final isTensorBufferError =
+        message.contains('convert_tensor_buffer') ||
+            message.contains('litert_tensor_buffer') ||
+            message.contains('llm_litert_compiled_model_executor') ||
+            message.contains('INTERNAL: ERROR');
+    if (!isTensorBufferError) return false;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] tensor-buffer error during vision decode; '
+        'flipping circuit breaker (vision disabled) and retrying '
+        'triage text-only: $error',
+      );
+    }
+    // Session circuit breaker: this device's vision path is unstable.
+    // Subsequent triage calls inside the same process strip the image
+    // before reaching the LLM (see [_generateReportOnce]). Persist the
+    // sentinel so cold launches honor the same skip — kicking the bug
+    // forever is better than rolling the dice on each turn.
+    _visionDisabled = true;
+    final store = _hardwareStore;
+    if (store != null) {
+      try {
+        await store.persistDisableVision();
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][LLM] persisted disableVision=true after vision crash',
+          );
+        }
+      } on Object catch (e) {
+        if (kDebugMode) {
+          debugPrint('[Aegis][LLM] persistDisableVision failed: $e');
+        }
+      }
+    }
+    return true;
+  }
+
   Future<TriageReport?> _generateReportOnce(
     TriageInput input, {
     required int maxTokens,
@@ -717,6 +827,20 @@ class LlmService {
     final capturedAt =
         '${DateTime.now().toUtc().toIso8601String().split('.').first}Z';
     final groundGps = input.gpsContext ?? '';
+    // Honor the vision circuit breaker. When [_visionDisabled] is set
+    // (in-memory after a prior crash this session, or persisted from a
+    // previous launch), strip the image up front so we never feed the
+    // broken vision path again. Audio + text + GPS still produce a
+    // usable report.
+    final effectiveImage =
+        _visionDisabled ? null : input.imageJpeg;
+    final hasImage = effectiveImage != null && effectiveImage.isNotEmpty;
+    if (kDebugMode && _visionDisabled && input.hasImage) {
+      debugPrint(
+        '[Aegis][LLM] vision circuit breaker active — stripping image '
+        'from triage input',
+      );
+    }
     final model = await _ensureModel(maxTokens: maxTokens);
     final systemPrompt = await _buildTriageSystemPrompt();
     final userPrompt = _buildTriageUserPrompt(input);
@@ -727,7 +851,8 @@ class LlmService {
         '[Aegis][LLM] generateReport begin '
         'sys=${systemPrompt.length}c user=${userPrompt.length}c '
         '~est=${estTokens}tok max=$maxTokens '
-        'audio=${input.hasAudio} image=${input.hasImage} '
+        'audio=${input.hasAudio} image=$hasImage '
+        'visionDisabled=$_visionDisabled '
         'log=${input.incidentLog.length}',
       );
     }
@@ -742,7 +867,7 @@ class LlmService {
       temperature: 0.3,
       topK: 40,
       topP: 0.9,
-      supportImage: input.hasImage,
+      supportImage: hasImage,
       supportAudio: input.hasAudio,
       supportsFunctionCalls: true,
       tools: <Tool>[_renderTriageReportTool],
@@ -768,7 +893,7 @@ class LlmService {
       final message = Message(
         text: userPrompt,
         isUser: true,
-        imageBytes: input.hasImage ? input.imageJpeg : null,
+        imageBytes: hasImage ? effectiveImage : null,
         audioBytes: input.hasAudio ? input.audioWav : null,
       );
       await chat.addQueryChunk(message);
@@ -1752,6 +1877,24 @@ Instructions:
     if (!_isOpenClUnavailable(error)) return false;
     _preferredBackend = PreferredBackend.cpu;
     await _disposeModel();
+    // Persist the sentinel so the next cold launch starts on CPU and
+    // never re-hits the GPU path that just corrupted the context. Best-
+    // effort — a write failure shouldn't block the in-process recovery.
+    final store = _hardwareStore;
+    if (store != null) {
+      try {
+        await store.persistForceCpu();
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][LLM] persisted forceCpuBackend=true after GPU crash',
+          );
+        }
+      } on Object catch (e) {
+        if (kDebugMode) {
+          debugPrint('[Aegis][LLM] persistForceCpu failed: $e');
+        }
+      }
+    }
     return true;
   }
 
@@ -1773,14 +1916,33 @@ Instructions:
       throw StateError('LLM pack ${pack.id} is not installed');
     }
 
+    // Engine `max_num_tokens` ceiling is BIGGER-IS-FINE — bumping a
+    // chat path that only needs 1024 onto a 4096-token engine costs us
+    // nothing (the ceiling only matters for triage's vision prefill).
+    // So when paths disagree, we always satisfy the LARGEST request
+    // and reuse a single engine across ASR / chat / triage. This kills
+    // the "ASR loads 1024 → triage requests 4096 → race returns the
+    // 1024 engine → INVALID_ARGUMENT: 2263 >= 1024" bug.
+    final effective =
+        _model != null && _model!.maxTokens > maxTokens
+            ? _model!.maxTokens
+            : maxTokens;
     final cached = _model;
-    if (cached != null && cached.maxTokens == maxTokens) return cached;
+    if (cached != null && cached.maxTokens >= effective) return cached;
 
     final existingLoad = _loadFuture;
     if (existingLoad != null) {
       await existingLoad;
       final reloaded = _model;
-      if (reloaded != null) return reloaded;
+      // BUG FIX: previously returned `reloaded` unconditionally — if
+      // the in-flight load was a smaller-capacity engine (e.g. ASR's
+      // 1024), the caller asking for 4096 silently got the 1024
+      // engine and image prefill blew up at the JNI boundary. Now we
+      // only return when the awaited engine actually has the ceiling
+      // we need; otherwise fall through to rebuild.
+      if (reloaded != null && reloaded.maxTokens >= effective) {
+        return reloaded;
+      }
     }
 
     final completer = Completer<void>();
@@ -1803,7 +1965,10 @@ Instructions:
         );
       }
       final model = await FlutterGemma.getActiveModel(
-        maxTokens: maxTokens,
+        // Use the larger ceiling (see `effective` calc above) so we
+        // never recreate the engine just because a chat turn asked
+        // for a smaller cap than a previous triage turn.
+        maxTokens: effective,
         preferredBackend: _preferredBackend,
         supportAudio: true,
         supportImage: true,
@@ -1830,8 +1995,23 @@ Instructions:
 
   bool _isOpenClUnavailable(Object error) {
     final message = error.toString().toLowerCase();
-    return message.contains('opencl') ||
-        message.contains('libliterttopkopenclsampler');
+    // Original signals: sampler shared lib missing entirely.
+    if (message.contains('opencl') ||
+        message.contains('libliterttopkopenclsampler')) {
+      return true;
+    }
+    // Additional GPU-delegate failure modes observed on Mali devices
+    // where the OpenCL runtime is present but in a bad state — usually
+    // after a prior session left GPU context dirty, or the driver
+    // rejected the kernel batch. Force-fall to CPU so the next attempt
+    // doesn't loop on the same broken delegate.
+    return message.contains('clenqueuewritebuffer') ||
+        message.contains('failed to upload data to gpu') ||
+        message.contains('delegatekernellitert') ||
+        message.contains('stablehlo_composite') ||
+        message.contains('dynamic_update_slice') ||
+        message.contains('failed to create engine') ||
+        message.contains('failed to initialize kernel');
   }
 
   Future<void> _install(VoiceModelPack pack) async {

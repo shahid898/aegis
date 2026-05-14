@@ -55,7 +55,15 @@ Future<void> configureDependencies() async {
   // user lands on a screen that actually speaks/listens.
   sl.registerLazySingleton<TtsService>(() => TtsService(sl<ModelRegistry>()));
   sl.registerLazySingleton<LlmService>(
-    () => LlmService(sl<ModelRegistry>(), skills: sl<SkillsRegistry>()),
+    () => LlmService(
+      sl<ModelRegistry>(),
+      skills: sl<SkillsRegistry>(),
+      // Persist hardware-fallback sentinels through Hive so a single
+      // GPU / vision crash on this device sticks across cold launches.
+      // Wrapper is hand-rolled (no codegen) so LlmService stays
+      // independent of the Hive layer in tests.
+      hardwareStore: _StorageHardwareFallbackStore(sl<StorageService>()),
+    ),
   );
   // SttService uses Gemma 4 for transcription via a callback into LlmService
   // so it never holds a direct reference to LlmService itself.
@@ -119,4 +127,26 @@ Future<void> configureDependencies() async {
   llm.setChatPack(ModelCatalog.llmPack);
   llm.useChat();
   unawaited(llm.warmUp());
+}
+
+/// Thin Hive-backed adapter for [LlmService]'s hardware-fallback
+/// sentinels. Keeps `LlmService` free of a direct `StorageService`
+/// dependency — tests can pass an in-memory fake or omit the store
+/// entirely (LlmService falls back to in-process-only behavior).
+class _StorageHardwareFallbackStore implements HardwareFallbackStore {
+  _StorageHardwareFallbackStore(this._storage);
+
+  final StorageService _storage;
+
+  @override
+  bool readForceCpu() => _storage.forceCpuBackend;
+
+  @override
+  bool readDisableVision() => _storage.disableVision;
+
+  @override
+  Future<void> persistForceCpu() => _storage.setForceCpuBackend(true);
+
+  @override
+  Future<void> persistDisableVision() => _storage.setDisableVision(true);
 }

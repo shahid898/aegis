@@ -83,6 +83,29 @@ class StorageService {
         jsonEncode(ids),
       );
 
+  // -- LLM hardware fallback sentinels -------------------------------------
+  //
+  // Persistent escape hatches for devices where LiteRT-LM's GPU /
+  // OpenCL path crashed and corrupted the per-process GL/CL context.
+  // Once we observe a recoverable-but-process-fatal crash (e.g.
+  // `clEnqueueMapBuffer -14`, `STABLEHLO_COMPOSITE failed to prepare`,
+  // `convert_tensor_buffer` reshape error), we persist these flags so
+  // the next cold launch starts on the safe path and never re-hits the
+  // bug. Both flags are sticky; user-visible reset would live behind a
+  // future "Reset hardware" debug setting.
+
+  bool get forceCpuBackend =>
+      _settings.get(StorageKeys.llmForceCpuBackend) == 'true';
+
+  Future<void> setForceCpuBackend(bool value) =>
+      _settings.put(StorageKeys.llmForceCpuBackend, value.toString());
+
+  bool get disableVision =>
+      _settings.get(StorageKeys.llmDisableVision) == 'true';
+
+  Future<void> setDisableVision(bool value) =>
+      _settings.put(StorageKeys.llmDisableVision, value.toString());
+
   // -- Emergency contacts (capped at 5) ------------------------------------
 
   static const int maxContacts = 5;

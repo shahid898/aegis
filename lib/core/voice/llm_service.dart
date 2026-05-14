@@ -1566,7 +1566,17 @@ Skills (set `recommended_skill` if matching):
               in chat.generateChatResponseAsync()) {
             if (response is TextResponse) {
               final token = response.token;
-              if (token.isNotEmpty) textController.add(token);
+              if (token.isEmpty) continue;
+              // flutter_gemma 0.15.0 also emits the raw tool-call JSON
+              // wrapper as a TextResponse *before* parsing it into a
+              // FunctionCallResponse. Without this guard the JSON
+              // blob (`{"role":"assistant","tool_calls":[...]}`) ends
+              // up in the chat bubble next to the inline map card.
+              // Strip the wrapper deterministically — anything that
+              // starts with the assistant-role envelope and mentions
+              // `tool_calls` is the SDK's transitional emission.
+              if (_looksLikeToolCallJson(token)) continue;
+              textController.add(token);
             } else if (response is FunctionCallResponse) {
               final call = _toMapCall(response);
               if (call != null) mapEvents.add(call);
@@ -1610,6 +1620,24 @@ Skills (set `recommended_skill` if matching):
       await _disposeChat();
       rethrow;
     }
+  }
+
+  /// True when [token] is the SDK's transitional emission of a tool
+  /// call as text (a JSON envelope shaped like
+  /// `{"role":"assistant","tool_calls":[…]}`). flutter_gemma 0.15.0
+  /// emits this *and* a parsed `FunctionCallResponse` on the same
+  /// stream — suppressing the text variant keeps the wrapper out of
+  /// the chat bubble.
+  static final RegExp _toolCallJsonProbe = RegExp(
+    r'^\s*\{\s*"role"\s*:\s*"assistant".*"tool_calls"',
+    multiLine: false,
+    dotAll: true,
+  );
+
+  bool _looksLikeToolCallJson(String token) {
+    if (token.length < 32) return false;
+    if (!token.contains('tool_calls')) return false;
+    return _toolCallJsonProbe.hasMatch(token);
   }
 
   /// Convert a flutter_gemma `FunctionCallResponse` into a [ChatMapCall]

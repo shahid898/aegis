@@ -2,13 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../../app/theme.dart';
 import '../../../core/places/map_view_query.dart';
 import '../../../core/places/place.dart';
 
 /// Compact in-chat map card. Rendered inline between user + assistant
 /// bubbles whenever Gemma 4 fired the `render_map_view` tool on a chat
-/// turn. Drops the standalone-page chrome (filter bar, action rail, list
-/// toggle) — chat surface is bandwidth-limited.
+/// turn. Drops the standalone-page chrome (filter bar, action rail,
+/// list toggle) — chat surface is bandwidth-limited.
+///
+/// Tiles: CARTO Voyager raster basemap. OSM's tile.openstreetmap.org
+/// blocks Flutter Map apps for violating their no-mobile-app policy.
+/// Voyager is free for limited use and styled to match a light theme.
 class InlineMapCard extends StatefulWidget {
   const InlineMapCard({
     super.key,
@@ -17,7 +22,7 @@ class InlineMapCard extends StatefulWidget {
     required this.center,
     this.onPlaceTap,
     this.onCall,
-    this.height = 320,
+    this.height = 280,
   });
 
   final MapViewQuery query;
@@ -64,8 +69,11 @@ class _InlineMapCardState extends State<InlineMapCard>
       borderRadius: BorderRadius.circular(14),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF1E1E2E),
-          border: Border.all(color: const Color(0xFF333355), width: 0.5),
+          color: Colors.white,
+          border: Border.all(
+            color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+            width: 0.6,
+          ),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
@@ -77,6 +85,11 @@ class _InlineMapCardState extends State<InlineMapCard>
               child: Stack(
                 children: [
                   _buildMap(),
+                  Positioned(
+                    left: 6,
+                    bottom: 6,
+                    child: _buildAttribution(),
+                  ),
                   if (_selected != null)
                     Positioned(
                       left: 0,
@@ -103,13 +116,17 @@ class _InlineMapCardState extends State<InlineMapCard>
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
       child: Row(
         children: [
-          const Icon(Icons.map_rounded, size: 16, color: Colors.white70),
+          const Icon(
+            Icons.map_rounded,
+            size: 16,
+            color: AegisColors.primary,
+          ),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               categories.isEmpty ? 'Nearby places' : categories,
               style: const TextStyle(
-                color: Colors.white,
+                color: AegisColors.onSurface,
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
               ),
@@ -120,7 +137,10 @@ class _InlineMapCardState extends State<InlineMapCard>
           Text(
             '${widget.places.length} · '
             '${widget.query.radiusKm.toStringAsFixed(0)} km',
-            style: const TextStyle(color: Colors.white54, fontSize: 11),
+            style: const TextStyle(
+              color: AegisColors.onSurfaceMuted,
+              fontSize: 11,
+            ),
           ),
         ],
       ),
@@ -144,7 +164,14 @@ class _InlineMapCardState extends State<InlineMapCard>
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          // CARTO Voyager — free raster basemap with light, friendly
+          // styling. Avoids OSM's tile.openstreetmap.org which now
+          // hard-blocks Flutter Map apps for tile-usage policy
+          // violations. Attribution rendered as a small chip below.
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/'
+              '{z}/{x}/{y}.png',
+          subdomains: const ['a', 'b', 'c', 'd'],
           userAgentPackageName: 'app.aegis.offline',
           maxNativeZoom: 19,
           errorTileCallback: (tile, error, stack) {},
@@ -154,14 +181,31 @@ class _InlineMapCardState extends State<InlineMapCard>
             point: widget.center,
             radius: widget.query.radiusKm * 1000,
             useRadiusInMeter: true,
-            color: const Color(0x141565C0),
-            borderColor: const Color(0x401565C0),
+            color: AegisColors.primary.withValues(alpha: 0.06),
+            borderColor: AegisColors.primary.withValues(alpha: 0.35),
             borderStrokeWidth: 1,
           ),
         ]),
         MarkerLayer(markers: widget.places.map(_buildMarker).toList()),
         MarkerLayer(markers: [_buildUserMarker()]),
       ],
+    );
+  }
+
+  Widget _buildAttribution() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: const Text(
+        '© OpenStreetMap · © CARTO',
+        style: TextStyle(
+          color: AegisColors.onSurfaceMuted,
+          fontSize: 9,
+        ),
+      ),
     );
   }
 
@@ -183,13 +227,13 @@ class _InlineMapCardState extends State<InlineMapCard>
             color: place.category.color,
             shape: BoxShape.circle,
             border: Border.all(
-              color: selected ? Colors.white : Colors.white24,
-              width: selected ? 2.5 : 1.2,
+              color: Colors.white,
+              width: selected ? 2.5 : 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: place.category.color.withValues(alpha: 0.35),
-                blurRadius: selected ? 10 : 3,
+                color: place.category.color.withValues(alpha: 0.45),
+                blurRadius: selected ? 10 : 4,
               ),
             ],
           ),
@@ -219,18 +263,24 @@ class _InlineMapCardState extends State<InlineMapCard>
             Container(
               width: 40 * _pulseAnim.value,
               height: 40 * _pulseAnim.value,
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Color(0x301565C0),
+                color: AegisColors.primary.withValues(alpha: 0.18),
               ),
             ),
             Container(
               width: 16,
               height: 16,
               decoration: BoxDecoration(
-                color: const Color(0xFF1565C0),
+                color: AegisColors.primary,
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: AegisColors.primary.withValues(alpha: 0.45),
+                    blurRadius: 6,
+                  ),
+                ],
               ),
             ),
           ],
@@ -244,9 +294,19 @@ class _InlineMapCardState extends State<InlineMapCard>
       margin: const EdgeInsets.all(8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: const Color(0xEE1E1E2E),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFF444466), width: 0.5),
+        border: Border.all(
+          color: AegisColors.onSurfaceMuted.withValues(alpha: 0.2),
+          width: 0.5,
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x14000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -257,8 +317,11 @@ class _InlineMapCardState extends State<InlineMapCard>
               color: place.category.color,
               shape: BoxShape.circle,
             ),
-            child: Icon(place.category.icon,
-                color: Colors.white, size: 14),
+            child: Icon(
+              place.category.icon,
+              color: Colors.white,
+              size: 14,
+            ),
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -268,7 +331,7 @@ class _InlineMapCardState extends State<InlineMapCard>
                 Text(
                   place.name,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: AegisColors.onSurface,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -279,7 +342,7 @@ class _InlineMapCardState extends State<InlineMapCard>
                   '${place.distanceKm.toStringAsFixed(1)} km · '
                   '${place.walkingMinutes} min walk',
                   style: const TextStyle(
-                    color: Colors.white60,
+                    color: AegisColors.onSurfaceMuted,
                     fontSize: 11,
                   ),
                 ),
@@ -290,8 +353,11 @@ class _InlineMapCardState extends State<InlineMapCard>
             IconButton(
               tooltip: 'Call',
               onPressed: () => widget.onCall?.call(place.phone!),
-              icon: const Icon(Icons.call_rounded,
-                  size: 18, color: Color(0xFF81C784)),
+              icon: const Icon(
+                Icons.call_rounded,
+                size: 18,
+                color: AegisColors.primary,
+              ),
             ),
         ],
       ),
@@ -301,7 +367,7 @@ class _InlineMapCardState extends State<InlineMapCard>
   Widget _buildListPreview() {
     final top = widget.places.take(3).toList();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -323,7 +389,7 @@ class _InlineMapCardState extends State<InlineMapCard>
                     child: Text(
                       p.name,
                       style: const TextStyle(
-                        color: Colors.white70,
+                        color: AegisColors.onSurface,
                         fontSize: 12,
                       ),
                       maxLines: 1,
@@ -333,7 +399,7 @@ class _InlineMapCardState extends State<InlineMapCard>
                   Text(
                     '${p.distanceKm.toStringAsFixed(1)} km',
                     style: const TextStyle(
-                      color: Colors.white38,
+                      color: AegisColors.onSurfaceMuted,
                       fontSize: 11,
                     ),
                   ),

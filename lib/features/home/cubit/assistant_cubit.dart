@@ -803,6 +803,13 @@ class AssistantCubit extends Cubit<AssistantState> {
     _pendingMapQuery = null;
     _pendingMapPlaces = null;
     _pendingMapCenter = null;
+    // Tracks the in-flight map-call resolution. Stream.listen's
+    // onData callback is *not* awaited by the SDK before onDone fires,
+    // so without this gate the listen loop restarts the mic while
+    // _resolveMapCall is still hitting sqflite + TTS, the mic catches
+    // its own playback, and we end up in an infinite tool-call echo
+    // loop. We await this future after the stream closes.
+    final mapCallFutures = <Future<void>>[];
 
     void flushSentences({bool force = false}) {
       final text = pending.toString();
@@ -822,7 +829,7 @@ class AssistantCubit extends Cubit<AssistantState> {
 
     final completer = Completer<void>();
     _llmSub = _llm.askStream(transcript).listen(
-      (event) async {
+      (event) {
         switch (event) {
           case ChatTextChunk(:final token):
             if (token.isEmpty) return;
@@ -834,7 +841,11 @@ class AssistantCubit extends Cubit<AssistantState> {
             if (kDebugMode) {
               debugPrint('[Aegis][Cubit] ChatMapCall $query');
             }
-            await _resolveMapCall(query);
+            // Kick off resolution but don't await inside the
+            // listener — Stream.listen ignores the returned Future
+            // and would fire onDone before this finishes. Track and
+            // drain after the stream closes.
+            mapCallFutures.add(_resolveMapCall(query));
         }
       },
       onDone: () {
@@ -849,7 +860,27 @@ class AssistantCubit extends Cubit<AssistantState> {
     try {
       await completer.future;
       flushSentences(force: true);
-      if (spokeAtLeastOne) await _tts.whenIdle;
+      // Wait for any in-flight map-call resolutions to finish before
+      // we touch _pendingMapQuery / _pendingMapPlaces below.
+      if (mapCallFutures.isNotEmpty) {
+        await Future.wait(mapCallFutures);
+      }
+      // Drain TTS before returning. Two paths queue speech:
+      //   • streaming text chunks set [spokeAtLeastOne]
+      //   • tool calls (render_map_view) queue TTS inside
+      //     [_resolveMapCall]
+      // The listen loop restarts mic capture as soon as _runChat
+      // returns — if TTS is still playing the mic catches its own
+      // playback, STT transcribes it, and Gemma re-fires the tool in
+      // an infinite loop. Waiting for whenIdle + a short post-TTS
+      // grace gap breaks that.
+      if (spokeAtLeastOne || _pendingMapQuery != null) {
+        await _tts.whenIdle;
+        // Trailing speaker decay + STT VAD warm-up window. Skipping
+        // this lets the mic catch the tail end of the system audio
+        // through the device's preamp.
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
 
       final assistantText = responseBuffer.toString().trim();
       _lastReport = null;
@@ -906,6 +937,14 @@ class AssistantCubit extends Cubit<AssistantState> {
       return;
     }
     try {
+      // Queue the spoken summary first so it can prefetch + start
+      // synthesising while we hit GPS + sqflite. TTS pipeline buffers
+      // internally, so the user hears it the moment the map mounts.
+      final spoken = query.spokenSummary.trim();
+      if (spoken.isNotEmpty) {
+        emit(state.copyWith(stage: AssistantStage.speaking));
+        unawaited(_tts.enqueue(spoken));
+      }
       final center = await _resolveMapCenter();
       if (center == null) {
         if (kDebugMode) {
@@ -923,10 +962,6 @@ class AssistantCubit extends Cubit<AssistantState> {
       _pendingMapQuery = query;
       _pendingMapPlaces = hits;
       _pendingMapCenter = center;
-      final spoken = query.spokenSummary.trim();
-      if (spoken.isNotEmpty) {
-        unawaited(_tts.enqueue(spoken));
-      }
       if (kDebugMode) {
         debugPrint(
           '[Aegis][Cubit] map call resolved hits=${hits.length} '

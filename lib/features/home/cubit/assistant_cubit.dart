@@ -513,15 +513,26 @@ class AssistantCubit extends Cubit<AssistantState> {
     _autoConfirmTimer?.cancel();
 
     final history = <String>[];
-    final replay = state.turns.length > _historyTurnsForReplay
-        ? state.turns.sublist(state.turns.length - _historyTurnsForReplay)
-        : state.turns;
-    for (final turn in replay) {
-      history.add('user: ${turn.user}');
-      final summary = turn.assistant.length > 160
-          ? '${turn.assistant.substring(0, 160)}…'
-          : turn.assistant;
-      history.add('aegis: $summary');
+    // Triage reports must be independent of prior triage turns. Each
+    // report is graded only on the evidence (image / audio / GPS / text)
+    // attached to THIS submission — past reports would bleed
+    // observations from unrelated scenes into the current analysis
+    // (e.g. "flooding" carrying over into a fire photo). Only the chat
+    // path needs conversational replay.
+    //
+    // `extraIncidentLog` carries reject-feedback ("previous-attempt-
+    // rejected: …") for the retry flow — that's intentional and stays.
+    if (!useTriagePath) {
+      final replay = state.turns.length > _historyTurnsForReplay
+          ? state.turns.sublist(state.turns.length - _historyTurnsForReplay)
+          : state.turns;
+      for (final turn in replay) {
+        history.add('user: ${turn.user}');
+        final summary = turn.assistant.length > 160
+            ? '${turn.assistant.substring(0, 160)}…'
+            : turn.assistant;
+        history.add('aegis: $summary');
+      }
     }
     history.addAll(extraIncidentLog);
 
@@ -877,17 +888,25 @@ class AssistantCubit extends Cubit<AssistantState> {
     if (decoded == null) {
       throw const FormatException('Unsupported image format');
     }
+    // 384px longest edge: at 16x16 patches this lands the image at
+    // ~576 patches (24x24 max). The LiteRT-LM vision encoder still
+    // pads up to its `max_num_patches: 2520` ceiling regardless of
+    // source size, but a smaller JPEG keeps the FFI marshal + image
+    // decode path fast and cuts the foreground-thread CPU spike on
+    // mid-tier devices. 512 → 384 also shaves ~30% off the encode
+    // step (image.copyResize is pure Dart so size matters here too).
+    const longestEdge = 384;
     final longest = decoded.width > decoded.height
         ? decoded.width
         : decoded.height;
-    final scaled = longest > 512
+    final scaled = longest > longestEdge
         ? img.copyResize(
             decoded,
-            width: decoded.width >= decoded.height ? 512 : null,
-            height: decoded.height > decoded.width ? 512 : null,
+            width: decoded.width >= decoded.height ? longestEdge : null,
+            height: decoded.height > decoded.width ? longestEdge : null,
           )
         : decoded;
-    final bytes = img.encodeJpg(scaled, quality: 80);
+    final bytes = img.encodeJpg(scaled, quality: 75);
     return Uint8List.fromList(bytes);
   }
 

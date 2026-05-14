@@ -550,7 +550,21 @@ class LlmService {
       );
       await chat.addQueryChunk(message);
       final genSw = Stopwatch()..start();
-      final response = await chat.generateChatResponse();
+      // 4-minute hard cap. Mali GPU + CPU sampler fallback can take
+      // 60-180s on a multimodal turn; anything beyond 240s is almost
+      // certainly a wedged native session (we saw "EGL Production
+      // fence didn't signal" loops hang the chat forever). Throw so
+      // the cubit can surface a "try again" error instead of leaving
+      // the user staring at the thinking spinner.
+      final response = await chat.generateChatResponse().timeout(
+        const Duration(minutes: 4),
+        onTimeout: () {
+          throw TimeoutException(
+            'Triage analysis exceeded 4 minutes; native session likely '
+            'wedged on GPU pipeline. Retry the request.',
+          );
+        },
+      );
       if (kDebugMode) {
         debugPrint(
           '[Aegis][LLM] generateReport response '

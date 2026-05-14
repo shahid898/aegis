@@ -543,8 +543,46 @@ class _Bubble extends StatelessWidget {
   }
 }
 
-class _ThinkingBubble extends StatelessWidget {
+class _ThinkingBubble extends StatefulWidget {
   const _ThinkingBubble();
+
+  @override
+  State<_ThinkingBubble> createState() => _ThinkingBubbleState();
+}
+
+class _ThinkingBubbleState extends State<_ThinkingBubble> {
+  // Tick a stopwatch so the user sees the analysis is alive even when
+  // Mali GPU prefill takes 60-90s on multimodal input. The two-line
+  // hint also sets expectations — "this can take a minute" — so the
+  // user doesn't think the app crashed and force-quit halfway.
+  late final Stopwatch _sw;
+  Timer? _timer;
+  int _seconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _sw = Stopwatch()..start();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      setState(() => _seconds = _sw.elapsed.inSeconds);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _sw.stop();
+    super.dispose();
+  }
+
+  String _statusLine(int s) {
+    if (s < 8) return 'Reading your evidence…';
+    if (s < 25) return 'Looking at the image and audio…';
+    if (s < 60) return 'Drafting the report…';
+    if (s < 120) return 'Still working — this can take a minute.';
+    return 'Almost there — finalising the report.';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -572,19 +610,36 @@ class _ThinkingBubble extends StatelessWidget {
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            children: const [
-              SizedBox(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(
                 width: 16,
                 height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
-              SizedBox(width: 10),
-              Text(
-                'Analysing your report…',
-                style: TextStyle(
-                  color: AegisColors.onSurface,
-                  fontSize: 15,
-                  height: 1.3,
+              const SizedBox(width: 10),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _statusLine(_seconds),
+                      style: const TextStyle(
+                        color: AegisColors.onSurface,
+                        fontSize: 15,
+                        height: 1.3,
+                      ),
+                    ),
+                    Text(
+                      'Elapsed ${_seconds}s · keep the app open',
+                      style: const TextStyle(
+                        color: AegisColors.onSurfaceMuted,
+                        fontSize: 12,
+                        height: 1.3,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

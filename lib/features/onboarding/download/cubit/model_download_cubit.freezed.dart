@@ -14,7 +14,7 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$ModelDownloadState implements DiagnosticableTreeMixin {
 
- List<VoiceModelPack> get plan; Set<String> get installedIds; DownloadStatus get status; VoiceModelPack? get currentPack; int get currentReceivedBytes; int get currentTotalBytes; String? get errorMessage; String get placesProgressMessage; int get placesCount;
+ List<VoiceModelPack> get plan; Set<String> get installedIds; DownloadStatus get status; VoiceModelPack? get currentPack; int get currentReceivedBytes; int get currentTotalBytes; String? get errorMessage; String get placesProgressMessage; int get placesCount; String get tilesProgressMessage; double get tilesProgressFraction; int get tilesCached;
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -26,21 +26,21 @@ $ModelDownloadStateCopyWith<ModelDownloadState> get copyWith => _$ModelDownloadS
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'ModelDownloadState'))
-    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount));
+    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount))..add(DiagnosticsProperty('tilesProgressMessage', tilesProgressMessage))..add(DiagnosticsProperty('tilesProgressFraction', tilesProgressFraction))..add(DiagnosticsProperty('tilesCached', tilesCached));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is ModelDownloadState&&const DeepCollectionEquality().equals(other.plan, plan)&&const DeepCollectionEquality().equals(other.installedIds, installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is ModelDownloadState&&const DeepCollectionEquality().equals(other.plan, plan)&&const DeepCollectionEquality().equals(other.installedIds, installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount)&&(identical(other.tilesProgressMessage, tilesProgressMessage) || other.tilesProgressMessage == tilesProgressMessage)&&(identical(other.tilesProgressFraction, tilesProgressFraction) || other.tilesProgressFraction == tilesProgressFraction)&&(identical(other.tilesCached, tilesCached) || other.tilesCached == tilesCached));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(plan),const DeepCollectionEquality().hash(installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(plan),const DeepCollectionEquality().hash(installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount,tilesProgressMessage,tilesProgressFraction,tilesCached);
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount)';
+  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount, tilesProgressMessage: $tilesProgressMessage, tilesProgressFraction: $tilesProgressFraction, tilesCached: $tilesCached)';
 }
 
 
@@ -51,7 +51,7 @@ abstract mixin class $ModelDownloadStateCopyWith<$Res>  {
   factory $ModelDownloadStateCopyWith(ModelDownloadState value, $Res Function(ModelDownloadState) _then) = _$ModelDownloadStateCopyWithImpl;
 @useResult
 $Res call({
- List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount
+ List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount, String tilesProgressMessage, double tilesProgressFraction, int tilesCached
 });
 
 
@@ -68,7 +68,7 @@ class _$ModelDownloadStateCopyWithImpl<$Res>
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,Object? tilesProgressMessage = null,Object? tilesProgressFraction = null,Object? tilesCached = null,}) {
   return _then(_self.copyWith(
 plan: null == plan ? _self.plan : plan // ignore: cast_nullable_to_non_nullable
 as List<VoiceModelPack>,installedIds: null == installedIds ? _self.installedIds : installedIds // ignore: cast_nullable_to_non_nullable
@@ -79,6 +79,9 @@ as int,currentTotalBytes: null == currentTotalBytes ? _self.currentTotalBytes : 
 as int,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
 as String?,placesProgressMessage: null == placesProgressMessage ? _self.placesProgressMessage : placesProgressMessage // ignore: cast_nullable_to_non_nullable
 as String,placesCount: null == placesCount ? _self.placesCount : placesCount // ignore: cast_nullable_to_non_nullable
+as int,tilesProgressMessage: null == tilesProgressMessage ? _self.tilesProgressMessage : tilesProgressMessage // ignore: cast_nullable_to_non_nullable
+as String,tilesProgressFraction: null == tilesProgressFraction ? _self.tilesProgressFraction : tilesProgressFraction // ignore: cast_nullable_to_non_nullable
+as double,tilesCached: null == tilesCached ? _self.tilesCached : tilesCached // ignore: cast_nullable_to_non_nullable
 as int,
   ));
 }
@@ -164,10 +167,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount,  String tilesProgressMessage,  double tilesProgressFraction,  int tilesCached)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _ModelDownloadState() when $default != null:
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount,_that.tilesProgressMessage,_that.tilesProgressFraction,_that.tilesCached);case _:
   return orElse();
 
 }
@@ -185,10 +188,10 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount,  String tilesProgressMessage,  double tilesProgressFraction,  int tilesCached)  $default,) {final _that = this;
 switch (_that) {
 case _ModelDownloadState():
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount,_that.tilesProgressMessage,_that.tilesProgressFraction,_that.tilesCached);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -205,10 +208,10 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( List<VoiceModelPack> plan,  Set<String> installedIds,  DownloadStatus status,  VoiceModelPack? currentPack,  int currentReceivedBytes,  int currentTotalBytes,  String? errorMessage,  String placesProgressMessage,  int placesCount,  String tilesProgressMessage,  double tilesProgressFraction,  int tilesCached)?  $default,) {final _that = this;
 switch (_that) {
 case _ModelDownloadState() when $default != null:
-return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount);case _:
+return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_that.currentReceivedBytes,_that.currentTotalBytes,_that.errorMessage,_that.placesProgressMessage,_that.placesCount,_that.tilesProgressMessage,_that.tilesProgressFraction,_that.tilesCached);case _:
   return null;
 
 }
@@ -220,7 +223,7 @@ return $default(_that.plan,_that.installedIds,_that.status,_that.currentPack,_th
 
 
 class _ModelDownloadState extends ModelDownloadState with DiagnosticableTreeMixin {
-  const _ModelDownloadState({required final  List<VoiceModelPack> plan, final  Set<String> installedIds = const <String>{}, this.status = DownloadStatus.idle, this.currentPack, this.currentReceivedBytes = 0, this.currentTotalBytes = 1, this.errorMessage, this.placesProgressMessage = '', this.placesCount = 0}): _plan = plan,_installedIds = installedIds,super._();
+  const _ModelDownloadState({required final  List<VoiceModelPack> plan, final  Set<String> installedIds = const <String>{}, this.status = DownloadStatus.idle, this.currentPack, this.currentReceivedBytes = 0, this.currentTotalBytes = 1, this.errorMessage, this.placesProgressMessage = '', this.placesCount = 0, this.tilesProgressMessage = '', this.tilesProgressFraction = 0.0, this.tilesCached = 0}): _plan = plan,_installedIds = installedIds,super._();
   
 
  final  List<VoiceModelPack> _plan;
@@ -244,6 +247,9 @@ class _ModelDownloadState extends ModelDownloadState with DiagnosticableTreeMixi
 @override final  String? errorMessage;
 @override@JsonKey() final  String placesProgressMessage;
 @override@JsonKey() final  int placesCount;
+@override@JsonKey() final  String tilesProgressMessage;
+@override@JsonKey() final  double tilesProgressFraction;
+@override@JsonKey() final  int tilesCached;
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
@@ -256,21 +262,21 @@ _$ModelDownloadStateCopyWith<_ModelDownloadState> get copyWith => __$ModelDownlo
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'ModelDownloadState'))
-    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount));
+    ..add(DiagnosticsProperty('plan', plan))..add(DiagnosticsProperty('installedIds', installedIds))..add(DiagnosticsProperty('status', status))..add(DiagnosticsProperty('currentPack', currentPack))..add(DiagnosticsProperty('currentReceivedBytes', currentReceivedBytes))..add(DiagnosticsProperty('currentTotalBytes', currentTotalBytes))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('placesProgressMessage', placesProgressMessage))..add(DiagnosticsProperty('placesCount', placesCount))..add(DiagnosticsProperty('tilesProgressMessage', tilesProgressMessage))..add(DiagnosticsProperty('tilesProgressFraction', tilesProgressFraction))..add(DiagnosticsProperty('tilesCached', tilesCached));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ModelDownloadState&&const DeepCollectionEquality().equals(other._plan, _plan)&&const DeepCollectionEquality().equals(other._installedIds, _installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _ModelDownloadState&&const DeepCollectionEquality().equals(other._plan, _plan)&&const DeepCollectionEquality().equals(other._installedIds, _installedIds)&&(identical(other.status, status) || other.status == status)&&(identical(other.currentPack, currentPack) || other.currentPack == currentPack)&&(identical(other.currentReceivedBytes, currentReceivedBytes) || other.currentReceivedBytes == currentReceivedBytes)&&(identical(other.currentTotalBytes, currentTotalBytes) || other.currentTotalBytes == currentTotalBytes)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&(identical(other.placesProgressMessage, placesProgressMessage) || other.placesProgressMessage == placesProgressMessage)&&(identical(other.placesCount, placesCount) || other.placesCount == placesCount)&&(identical(other.tilesProgressMessage, tilesProgressMessage) || other.tilesProgressMessage == tilesProgressMessage)&&(identical(other.tilesProgressFraction, tilesProgressFraction) || other.tilesProgressFraction == tilesProgressFraction)&&(identical(other.tilesCached, tilesCached) || other.tilesCached == tilesCached));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_plan),const DeepCollectionEquality().hash(_installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount);
+int get hashCode => Object.hash(runtimeType,const DeepCollectionEquality().hash(_plan),const DeepCollectionEquality().hash(_installedIds),status,currentPack,currentReceivedBytes,currentTotalBytes,errorMessage,placesProgressMessage,placesCount,tilesProgressMessage,tilesProgressFraction,tilesCached);
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount)';
+  return 'ModelDownloadState(plan: $plan, installedIds: $installedIds, status: $status, currentPack: $currentPack, currentReceivedBytes: $currentReceivedBytes, currentTotalBytes: $currentTotalBytes, errorMessage: $errorMessage, placesProgressMessage: $placesProgressMessage, placesCount: $placesCount, tilesProgressMessage: $tilesProgressMessage, tilesProgressFraction: $tilesProgressFraction, tilesCached: $tilesCached)';
 }
 
 
@@ -281,7 +287,7 @@ abstract mixin class _$ModelDownloadStateCopyWith<$Res> implements $ModelDownloa
   factory _$ModelDownloadStateCopyWith(_ModelDownloadState value, $Res Function(_ModelDownloadState) _then) = __$ModelDownloadStateCopyWithImpl;
 @override @useResult
 $Res call({
- List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount
+ List<VoiceModelPack> plan, Set<String> installedIds, DownloadStatus status, VoiceModelPack? currentPack, int currentReceivedBytes, int currentTotalBytes, String? errorMessage, String placesProgressMessage, int placesCount, String tilesProgressMessage, double tilesProgressFraction, int tilesCached
 });
 
 
@@ -298,7 +304,7 @@ class __$ModelDownloadStateCopyWithImpl<$Res>
 
 /// Create a copy of ModelDownloadState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? plan = null,Object? installedIds = null,Object? status = null,Object? currentPack = freezed,Object? currentReceivedBytes = null,Object? currentTotalBytes = null,Object? errorMessage = freezed,Object? placesProgressMessage = null,Object? placesCount = null,Object? tilesProgressMessage = null,Object? tilesProgressFraction = null,Object? tilesCached = null,}) {
   return _then(_ModelDownloadState(
 plan: null == plan ? _self._plan : plan // ignore: cast_nullable_to_non_nullable
 as List<VoiceModelPack>,installedIds: null == installedIds ? _self._installedIds : installedIds // ignore: cast_nullable_to_non_nullable
@@ -309,6 +315,9 @@ as int,currentTotalBytes: null == currentTotalBytes ? _self.currentTotalBytes : 
 as int,errorMessage: freezed == errorMessage ? _self.errorMessage : errorMessage // ignore: cast_nullable_to_non_nullable
 as String?,placesProgressMessage: null == placesProgressMessage ? _self.placesProgressMessage : placesProgressMessage // ignore: cast_nullable_to_non_nullable
 as String,placesCount: null == placesCount ? _self.placesCount : placesCount // ignore: cast_nullable_to_non_nullable
+as int,tilesProgressMessage: null == tilesProgressMessage ? _self.tilesProgressMessage : tilesProgressMessage // ignore: cast_nullable_to_non_nullable
+as String,tilesProgressFraction: null == tilesProgressFraction ? _self.tilesProgressFraction : tilesProgressFraction // ignore: cast_nullable_to_non_nullable
+as double,tilesCached: null == tilesCached ? _self.tilesCached : tilesCached // ignore: cast_nullable_to_non_nullable
 as int,
   ));
 }

@@ -7,6 +7,7 @@ import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../../core/places/onboarding_places_downloader.dart';
+import '../../../../core/places/tile_cache_downloader.dart';
 import '../../../../core/voice/model_catalog.dart';
 import '../../../../core/voice/model_pack.dart';
 import '../../../../core/voice/model_pack_repository.dart';
@@ -21,6 +22,7 @@ enum DownloadStatus {
   verifying,
   extracting,
   seedingPlaces,
+  seedingTiles,
   completed,
   failed,
   cancelled,
@@ -38,6 +40,9 @@ abstract class ModelDownloadState with _$ModelDownloadState {
     String? errorMessage,
     @Default('') String placesProgressMessage,
     @Default(0) int placesCount,
+    @Default('') String tilesProgressMessage,
+    @Default(0.0) double tilesProgressFraction,
+    @Default(0) int tilesCached,
   }) = _ModelDownloadState;
 
   const ModelDownloadState._();
@@ -80,10 +85,12 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     required ModelRegistry registry,
     AppRegion? region,
     OnboardingPlacesDownloader? placesDownloader,
+    TileCacheDownloader? tileCacheDownloader,
   })  : _repository = repository,
         _registry = registry,
         _region = region,
         _placesDownloader = placesDownloader,
+        _tileCacheDownloader = tileCacheDownloader,
         super(ModelDownloadState.forPlan(
           ModelCatalog.planFor(countryCode).all,
           const <String>{},
@@ -96,6 +103,7 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
   final ModelRegistry _registry;
   final AppRegion? _region;
   final OnboardingPlacesDownloader? _placesDownloader;
+  final TileCacheDownloader? _tileCacheDownloader;
 
   CancelToken? _cancelToken;
   StreamSubscription<ModelDownloadProgress>? _sub;
@@ -138,10 +146,52 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     }
 
     await _seedPlaces();
+    await _seedTiles();
 
     emit(state.copyWith(
       status: DownloadStatus.completed,
       currentPack: null,
+    ));
+  }
+
+  /// Best-effort one-shot CARTO tile-pyramid download. Streams progress
+  /// onto `tilesProgressMessage`/`tilesProgressFraction`. Network
+  /// failure is non-fatal: the inline map falls back to live tiles
+  /// (when online) and the cache fills opportunistically as the user
+  /// pans.
+  Future<void> _seedTiles() async {
+    final tiles = _tileCacheDownloader;
+    final region = _region;
+    if (tiles == null || region == null) return;
+    emit(state.copyWith(
+      status: DownloadStatus.seedingTiles,
+      tilesProgressMessage: 'Downloading offline map…',
+      tilesProgressFraction: 0,
+    ));
+    final downloader = TileCacheDownloader(
+      onProgress: (msg, frac) {
+        if (state.status != DownloadStatus.seedingTiles) return;
+        emit(state.copyWith(
+          tilesProgressMessage: msg,
+          tilesProgressFraction: frac,
+        ));
+      },
+    );
+    final result = await downloader.download(
+      userLocation: LatLng(region.latitude, region.longitude),
+    );
+    if (kDebugMode) {
+      debugPrint(
+        '[ModelDownloadCubit] tile seed success=${result.success} '
+        'tiles=${result.tilesCached} error=${result.error ?? "-"}',
+      );
+    }
+    emit(state.copyWith(
+      tilesCached: result.tilesCached,
+      tilesProgressFraction: 1,
+      tilesProgressMessage: result.success
+          ? 'Saved ${result.tilesCached} map tiles.'
+          : 'Offline map skipped — try again later.',
     ));
   }
 

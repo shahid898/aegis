@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_tile_caching/flutter_map_tile_caching.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/places/map_view_query.dart';
 import '../../../core/places/place.dart';
+import '../../../core/places/tile_cache_downloader.dart';
 
 /// Compact in-chat map card. Rendered inline between user + assistant
 /// bubbles whenever Gemma 4 fired the `render_map_view` tool on a chat
@@ -164,16 +166,21 @@ class _InlineMapCardState extends State<InlineMapCard>
       ),
       children: [
         TileLayer(
-          // CARTO Voyager — free raster basemap with light, friendly
-          // styling. Avoids OSM's tile.openstreetmap.org which now
-          // hard-blocks Flutter Map apps for tile-usage policy
-          // violations. Attribution rendered as a small chip below.
-          urlTemplate:
-              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/'
-              '{z}/{x}/{y}.png',
-          subdomains: const ['a', 'b', 'c', 'd'],
-          userAgentPackageName: 'app.aegis.offline',
+          // CARTO Voyager raster served through FMTC. Cache-first
+          // strategy: if a tile is already in the on-device store
+          // (seeded at onboarding by [TileCacheDownloader]), serve it
+          // without hitting the network. Falls back to live fetch +
+          // background cache fill when offline-but-not-yet-cached.
+          urlTemplate: TileCacheConfig.urlTemplate,
+          subdomains: TileCacheConfig.subdomains,
+          userAgentPackageName: TileCacheConfig.userAgentPackageName,
           maxNativeZoom: 19,
+          tileProvider: FMTCTileProvider(
+            stores: const {
+              TileCacheConfig.storeName: BrowseStoreStrategy.readUpdateCreate,
+            },
+            loadingStrategy: BrowseLoadingStrategy.cacheFirst,
+          ),
           errorTileCallback: (tile, error, stack) {},
         ),
         CircleLayer(circles: [

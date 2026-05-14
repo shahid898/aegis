@@ -6,6 +6,7 @@ import '../../../../app/router.dart';
 import '../../../../app/theme.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/places/onboarding_places_downloader.dart';
+import '../../../../core/places/tile_cache_downloader.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/voice/model_pack.dart';
 import '../../../../core/voice/model_pack_repository.dart';
@@ -26,6 +27,7 @@ class ModelDownloadPage extends StatelessWidget {
         registry: sl<ModelRegistry>(),
         region: region,
         placesDownloader: OnboardingPlacesDownloader(),
+        tileCacheDownloader: TileCacheDownloader(),
       )..start(),
       child: const _DownloadView(),
     );
@@ -87,6 +89,34 @@ class _DownloadView extends StatelessWidget {
                         Expanded(
                           child: Text(
                             state.placesProgressMessage,
+                            style: const TextStyle(
+                              color: AegisColors.onSurfaceMuted,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (state.tilesProgressMessage.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        if (state.status == DownloadStatus.seedingTiles) ...[
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                          const SizedBox(width: 8),
+                        ] else ...[
+                          const Icon(Icons.check_circle_outline,
+                              size: 16, color: AegisColors.primary),
+                          const SizedBox(width: 6),
+                        ],
+                        Expanded(
+                          child: Text(
+                            state.tilesProgressMessage,
                             style: const TextStyle(
                               color: AegisColors.onSurfaceMuted,
                               fontSize: 13,

@@ -410,7 +410,7 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                   ),
                 if (showThinking) ...[
                   if (showUser) const SizedBox(height: 12),
-                  const _ThinkingBubble(),
+                  _ThinkingBubble(forReport: state.thinkingForReport),
                 ],
                 if (hasResponse) ...[
                   if (showUser) const SizedBox(height: 12),
@@ -544,7 +544,13 @@ class _Bubble extends StatelessWidget {
 }
 
 class _ThinkingBubble extends StatefulWidget {
-  const _ThinkingBubble();
+  const _ThinkingBubble({required this.forReport});
+
+  /// True when the model is generating a structured triage report
+  /// (image / audio analysis path). False for plain chat replies. Drives
+  /// the status copy so chat doesn't show "Analysing report" while the
+  /// model is just answering a yes/no question.
+  final bool forReport;
 
   @override
   State<_ThinkingBubble> createState() => _ThinkingBubbleState();
@@ -577,11 +583,17 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
   }
 
   String _statusLine(int s) {
-    if (s < 8) return 'Reading your evidence…';
-    if (s < 25) return 'Looking at the image and audio…';
-    if (s < 60) return 'Drafting the report…';
-    if (s < 120) return 'Still working — this can take a minute.';
-    return 'Almost there — finalising the report.';
+    if (widget.forReport) {
+      if (s < 8) return 'Reading your evidence…';
+      if (s < 25) return 'Looking at the image and audio…';
+      if (s < 60) return 'Drafting the report…';
+      if (s < 120) return 'Still working — this can take a minute.';
+      return 'Almost there — finalising the report.';
+    }
+    if (s < 6) return 'Thinking…';
+    if (s < 20) return 'Composing a reply…';
+    if (s < 60) return 'Still thinking — first reply takes a moment.';
+    return 'Almost there — finalising the reply.';
   }
 
   @override

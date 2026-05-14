@@ -99,6 +99,7 @@ abstract class AssistantState with _$AssistantState {
     @Default('') String intakeText,
     @Default(false) bool intakeHasPhoto,
     @Default(false) bool intakeHasAudio,
+    @Default(false) bool thinkingForReport,
     Uint8List? intakeImagePreview,
   }) = _AssistantState;
 
@@ -508,6 +509,7 @@ class AssistantCubit extends Cubit<AssistantState> {
       response: '',
       surfaceReady: false,
       thinkingTrace: '',
+      thinkingForReport: useTriagePath,
     ));
     await _llmSub?.cancel();
     _autoConfirmTimer?.cancel();

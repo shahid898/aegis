@@ -1247,7 +1247,7 @@ Instructions:
       // to auto but with an empty `tools: []` list the SDK never
       // injects any tool prompt or routes the response through the
       // function-call parser.
-      isThinking: true,
+      isThinking: false,
       modelType: ModelType.gemma4,
       systemInstruction: _buildSystemPrompt(_preferredLanguage),
     );

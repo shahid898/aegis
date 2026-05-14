@@ -987,11 +987,36 @@ class IncidentReportBody extends StatelessWidget {
   static final RegExp _fullPlaceholder =
       RegExp(r'^\s*\[(?:INFERRED|UNKNOWN)[^\]]*\]\s*$', caseSensitive: false);
 
+  /// Canonical section names we expect from the schema's ICS-209
+  /// skeleton. Order matters — longer first so split-detection picks
+  /// the longest matching prefix.
+  static const List<String> _knownHeadings = <String>[
+    'PUBLIC IMPACT',
+    'STRUCTURES',
+    'SITUATION',
+    'RESPONSE',
+    'OUTLOOK',
+  ];
+
   static String _cleanHeading(String raw) {
     var s = raw.trim();
     s = s.replaceAll(RegExp(r'^[─━—=─]+|[─━—=─]+\$'), '').trim();
     s = s.replaceAll(RegExp(r'\s+[─━—=─]+\s*'), ' ').trim();
     if (s.replaceAll(RegExp(r'[─━—=─\s]'), '').isEmpty) return '';
+    // Split mashed-up headings: model occasionally drops the newline
+    // between `STRUCTURES` and `SITUATIONS:` producing
+    // `STRUCTURESSITUATIONS`. Recover by matching a known prefix.
+    final upper = s.toUpperCase().replaceAll(RegExp(r'\s+'), '');
+    for (final known in _knownHeadings) {
+      final canon = known.replaceAll(' ', '');
+      if (upper.startsWith(canon)) {
+        return _titleCase(known);
+      }
+    }
+    return _titleCase(s);
+  }
+
+  static String _titleCase(String s) {
     final words = s.split(RegExp(r'\s+'));
     return words.map((w) {
       if (w.isEmpty) return w;
@@ -999,6 +1024,16 @@ class IncidentReportBody extends StatelessWidget {
       return '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}';
     }).join(' ');
   }
+
+  /// Aliases keep long labels from blowing out the label column.
+  static const Map<String, String> _labelAliases = <String, String>{
+    'projected activity over next 6-24h': 'Projected Activity',
+    'projected activity over next 6-24 hours': 'Projected Activity',
+    'projected activity over next 24h': 'Projected Activity',
+    'projected activity (next 6-24h)': 'Projected Activity',
+    'resources deployed': 'Resources',
+    'public impact': 'Public Impact',
+  };
 
   static String _cleanLabel(String raw) {
     var s = raw.trim();
@@ -1008,12 +1043,9 @@ class IncidentReportBody extends StatelessWidget {
         '');
     s = s.replaceFirst(RegExp(r'^\d+(?:\.\d+)?\.?\s*'), '');
     if (s.isEmpty) return raw.trim();
-    final words = s.split(RegExp(r'\s+'));
-    return words.map((w) {
-      if (w.isEmpty) return w;
-      if (w.length <= 3 && w == w.toUpperCase()) return w;
-      return '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}';
-    }).join(' ');
+    final aliased = _labelAliases[s.toLowerCase().trim()];
+    if (aliased != null) return aliased;
+    return _titleCase(s);
   }
 
   bool _isHeading(String line) {
@@ -1234,15 +1266,21 @@ class _ReportFieldRow extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          constraints: const BoxConstraints(minWidth: 96, maxWidth: 160),
-          padding: const EdgeInsets.only(right: 8, top: 1),
-          child: Text(
-            labelText,
-            style: const TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Colors.black54,
+        // Fixed label-column width so every row in the body lines up,
+        // regardless of label length. Long labels wrap inside this
+        // column rather than steal width from the value column.
+        SizedBox(
+          width: 110,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8, top: 1),
+            child: Text(
+              labelText,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.black54,
+                height: 1.35,
+              ),
             ),
           ),
         ),

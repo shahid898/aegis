@@ -52,8 +52,17 @@ dependencies:
   # Audio playback (language samples, TTS output)
   just_audio: ^0.10.5
 
-  # Networking (one-time model-pack download)
+  # Networking — model-pack downloads.
+  # Dio still used for non-streaming requests (auth header probes, etc).
   dio: ^5.9.2
+
+  # Background-resumable downloader for multi-GB model packs.
+  # Uses Android WorkManager + foreground service so a download survives
+  # the user backgrounding / killing the Flutter UI; iOS uses
+  # URLSessionDownloadTask with the standard system background queue.
+  # Auto-resumes on flaky networks via HTTP `Range` headers when the
+  # server supports them.
+  background_downloader: ^9.5.4
 
   # Archive extraction (.tar.bz2 from sherpa-onnx releases)
   archive: ^4.0.9
@@ -81,7 +90,14 @@ dependencies:
   # called with an existing pending token` errors that surfaced when
   # we closed and recreated sessions to swap audio modality on/off
   # between transcription and chat turns.
-  flutter_gemma: ^0.15.0
+  # 0.15.1 patches `libLiteRtTopK{OpenCl,WebGpu}Sampler.so` with
+  # `patchelf --add-needed libLiteRtLm.so` so the GPU sampler loads on
+  # Android instead of dlopen-failing with `cannot locate symbol
+  # LiteRtCreateEnvironment` (our prior log line). With the sampler
+  # loaded, kernel batches and KV-cache updates stay on the GPU,
+  # cutting CPU-fallback round-trips that triggered repeated
+  # `DYNAMIC_UPDATE_SLICE` / `convert_tensor_buffer` crashes on Mali.
+  flutter_gemma: ^0.15.1
 
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2

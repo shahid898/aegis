@@ -50,7 +50,7 @@ packages:
     source: hosted
     version: "0.2.3"
   background_downloader:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: background_downloader
       sha256: "4cb23d9ad4f5060944f38164e7b90d4bf99b57b2472a3bd4676e59b2db4afd06"
@@ -354,10 +354,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_gemma
-      sha256: ec1a29f5abf36aa176506950d699ba328f100059bbceaa06bdd8e197e2b002e3
+      sha256: "0e528c8e7dce211f5b679bb3506bb5edaa1190dcb5063a841d1997766007fd44"
       url: "https://pub.dev"
     source: hosted
-    version: "0.15.0"
+    version: "0.15.1"
   flutter_lints:
     dependency: "direct dev"
     description:

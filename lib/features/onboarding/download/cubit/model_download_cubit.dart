@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:dio/dio.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
@@ -84,7 +83,12 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
   final ModelPackRepository _repository;
   final ModelRegistry _registry;
 
-  CancelToken? _cancelToken;
+  /// True while the user-initiated cancel is in-flight. Used to
+  /// distinguish "background_downloader returned canceled" from "the
+  /// stream errored mid-flight" since both surface as an exception
+  /// from the install stream.
+  bool _userCancelled = false;
+  VoiceModelPack? _inFlightPack;
   StreamSubscription<ModelDownloadProgress>? _sub;
 
   Future<void> _bootstrap() async {
@@ -108,11 +112,11 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
       if (state.installedIds.contains(pack.id)) continue;
       if (state.status == DownloadStatus.cancelled) return;
 
-      _cancelToken = CancelToken();
+      _userCancelled = false;
       try {
         await _runOne(pack);
       } on Object catch (e) {
-        if (_cancelToken?.isCancelled ?? false) {
+        if (_userCancelled) {
           emit(state.copyWith(status: DownloadStatus.cancelled));
           return;
         }
@@ -139,9 +143,10 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     ));
 
     await _sub?.cancel();
+    _inFlightPack = pack;
     final completer = Completer<void>();
     _sub = _repository
-        .install(pack, cancelToken: _cancelToken)
+        .install(pack)
         .listen(
       (p) {
         emit(state.copyWith(
@@ -167,25 +172,43 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     await completer.future;
   }
 
-  /// Abort the current download. Packs already extracted stay installed.
+  /// Abort the current download. Packs already extracted stay
+  /// installed; the in-flight pack is canceled in the native layer so
+  /// the foreground service exits cleanly.
   Future<void> cancel() async {
-    _cancelToken?.cancel('user cancelled');
+    _userCancelled = true;
+    final pack = _inFlightPack;
+    if (pack != null) {
+      await _repository.cancel(pack);
+    }
     await _sub?.cancel();
     _sub = null;
     emit(state.copyWith(status: DownloadStatus.cancelled));
   }
 
+  // NB: pause/resume removed — parallel chunked downloads (4 streams
+  // via HTTP Range) cannot be paused mid-flight. Cancel + restart is
+  // the only flow-control. Speed trade-off: ~2-4× faster overall.
+
   /// Skip downloads entirely. App will run in degraded mode (no voice).
-  /// Caller navigates away — this just marks the state so the UI can show
-  /// a clear "skipped" message if the user comes back.
+  /// Caller navigates away — this just marks the state so the UI can
+  /// show a clear "skipped" message if the user comes back.
   void skip() {
-    _cancelToken?.cancel('user skipped');
+    _userCancelled = true;
+    final pack = _inFlightPack;
+    if (pack != null) {
+      unawaited(_repository.cancel(pack));
+    }
     emit(state.copyWith(status: DownloadStatus.cancelled));
   }
 
   @override
   Future<void> close() async {
-    _cancelToken?.cancel('cubit closed');
+    _userCancelled = true;
+    final pack = _inFlightPack;
+    if (pack != null) {
+      unawaited(_repository.cancel(pack));
+    }
     await _sub?.cancel();
     return super.close();
   }

@@ -37,7 +37,7 @@ Future<void> configureDependencies() async {
 
   sl.registerSingleton<ModelRegistry>(ModelRegistry(sl<StorageService>()));
   sl.registerSingleton<ModelPackRepository>(
-    ModelPackRepository(sl<Dio>(), sl<ModelRegistry>()),
+    ModelPackRepository(sl<ModelRegistry>()),
   );
 
   // Agent Skills catalog. Singleton: the catalog is read-only after

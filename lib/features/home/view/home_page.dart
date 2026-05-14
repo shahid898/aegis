@@ -208,7 +208,7 @@ class _HomeViewState extends State<_HomeView> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const _Header(),
+                  _Header(state: state),
                   const SizedBox(height: 20),
                   Expanded(child: _TranscriptArea(state: state)),
                   const SizedBox(height: 16),
@@ -250,7 +250,8 @@ class _HomeViewState extends State<_HomeView> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header();
+  const _Header({required this.state});
+  final AssistantState state;
 
   @override
   Widget build(BuildContext context) {
@@ -281,12 +282,13 @@ class _Header extends StatelessWidget {
           onPressed: () => context.read<AssistantCubit>().startTriage(),
           icon: const Icon(Icons.medical_information_outlined),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 2),
         IconButton.filledTonal(
           tooltip: 'Reports',
           onPressed: () => context.push(AppRoute.reports.path),
           icon: const Icon(Icons.assignment_outlined),
         ),
+        const SizedBox(width: 5),
         _LanguageDropdown(currentCode: state.languageCode),
       ],
     );

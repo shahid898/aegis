@@ -164,7 +164,7 @@ class AssistantCubit extends Cubit<AssistantState> {
         _briefingSink = briefingSink,
         _languageCode = languageCode,
         _autoConfirmTimeout = autoConfirmTimeout,
-        super(const AssistantState(languageCode: languageCode)) {
+        super(AssistantState(languageCode: languageCode)) {
     if (kDebugMode) {
       debugPrint(
         '[AssistantCubit] init country=$countryCode '
@@ -215,7 +215,6 @@ class AssistantCubit extends Cubit<AssistantState> {
   final TtsService _tts;
   final ReportsRepository _reports;
   final String _countryCode;
-  final String? _languageCode;
   final Duration _autoConfirmTimeout;
 
   Uint8List? _pendingImageJpeg;

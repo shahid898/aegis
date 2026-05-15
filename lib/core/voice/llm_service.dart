@@ -1494,6 +1494,15 @@ match-mesh-beacon (missing person).
     } on Object {
       await _disposeChat();
       rethrow;
+    } finally {
+      // Multi-turn chat reuse on this bundle eventually segfaults inside
+      // `libLiteRtLm.so::ThreadPool::RunWorker` (null deref during
+      // second-turn prefill). Tear the chat down after every response
+      // so each turn boots a fresh session — Dart-side `incidentLog`
+      // still carries history into the next system prompt. Costs
+      // ~3-5s of session create per turn; we trade speed for not
+      // killing the entire process.
+      await _disposeChat();
     }
   }
 
@@ -1517,6 +1526,9 @@ match-mesh-beacon (missing person).
     } on Object {
       await _disposeChat();
       rethrow;
+    } finally {
+      // See ask() — same teardown for stability.
+      await _disposeChat();
     }
   }
 

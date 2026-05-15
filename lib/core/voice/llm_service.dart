@@ -24,6 +24,18 @@ abstract interface class HardwareFallbackStore {
   bool readDisableVision();
   Future<void> persistForceCpu();
   Future<void> persistDisableVision();
+
+  /// Clear the persisted `forceCpu` flag. Used at boot to migrate
+  /// installs from older builds that persisted CPU mode (which on this
+  /// bundle wedges the engine at XNNPack-incompatible DYNAMIC_UPDATE_
+  /// SLICE nodes). Safe to call when the flag is already false.
+  Future<void> clearForceCpu();
+
+  /// Clear the persisted `disableVision` flag. Used at boot to migrate
+  /// installs that flipped vision off after a warmup-induced GPU
+  /// poisoning — once warmup is gone, vision works again. Safe to
+  /// call when the flag is already false.
+  Future<void> clearDisableVision();
 }
 
 /// Reserved Gemma / LiteRT-LM tokens that should never appear in a final
@@ -173,8 +185,7 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
   'properties': <String, Object?>{
     'format': <String, Object?>{
       'type': 'string',
-      'description':
-          'Report template. Pick based on caller jurisdiction. Default ICS-209.',
+      'description': 'Report template. Default ICS-209.',
       'enum': <String>[
         'ICS-209',
         'OCHA_SITREP',
@@ -187,18 +198,18 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
     },
     'title': <String, Object?>{
       'type': 'string',
-      'description': 'Short incident title (e.g. "Building Collapse Incident").',
+      'description': 'Short incident title (e.g. Building Collapse Incident).',
     },
     'severity': <String, Object?>{
       'type': 'string',
       'description':
-          'Severity bucket. CRITICAL for life-threatening / mass-casualty; HIGH for serious damage or single trapped person; MODERATE for minor injuries or damage; LOW for property only; INFO when unsure.',
+          'CRITICAL=life-threatening/mass-casualty; HIGH=serious damage or one trapped; MODERATE=minor; LOW=property only; INFO=unsure.',
       'enum': <String>['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'INFO'],
     },
     'hazard_type': <String, Object?>{
       'type': 'string',
       'description':
-          'Primary hazard class. STRUCTURAL_DAMAGE for collapsed buildings, FIRE for active flames/smoke, FLOOD for water inundation, HAZMAT for chemical/gas, CASUALTY for injured people, MISSING_PERSON for unaccounted-for, MEDICAL for non-trauma medical, EVACUATION for crowd movement, OTHER fallback.',
+          'Primary hazard. STRUCTURAL_DAMAGE=collapsed building; FIRE=flame/smoke; FLOOD=water; HAZMAT=chemical/gas; CASUALTY=injured person; MISSING_PERSON; MEDICAL=non-trauma; EVACUATION; OTHER fallback.',
       'enum': <String>[
         'STRUCTURAL_DAMAGE',
         'CASUALTY',
@@ -214,12 +225,12 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
     'summary': <String, Object?>{
       'type': 'string',
       'description':
-          'Card subtitle. <=180 chars. Describe what is happening in one or two sentences.',
+          'Card subtitle, 1-2 sentences, <=180 chars, what is happening now.',
     },
     'immediate_actions': <String, Object?>{
       'type': 'array',
       'description':
-          'EXACTLY 3 to 5 imperative steps the responder should take right now. Each step MUST be a non-empty string 10-80 chars. Never emit empty strings or duplicates. Example: ["Call 112 fire-and-rescue", "Evacuate the north flank", "Do not re-enter the structure"].',
+          'EXACTLY 3-5 imperative responder steps. Each 10-80 chars, non-empty, unique. Example item: "Evacuate the north flank".',
       'minItems': 3,
       'maxItems': 5,
       'items': <String, Object?>{
@@ -232,7 +243,7 @@ const Map<String, Object?> _triageToolSchema = <String, Object?>{
       'type': 'string',
       'minLength': 600,
       'description':
-          'Detailed report body, 800-1800 chars. Five uppercase section headings on their own lines, each followed by 2-5 substantive `Label: value` rows. NEVER leave a row as a bare "0 reported" or "[INFERRED]" placeholder — instead OBSERVE and INFER from the evidence:\n\n• SITUATION — write 2-3 sentence narrative grounded in image/audio observations. Include scene layout, visible hazards, weather/light conditions, time of day cues, scale of impact.\n• PUBLIC IMPACT — for each of Fatal / Injured / Missing / Displaced: if the evidence supports a number, write it ("3 visible"). If not visible but the situation type suggests likely impact, qualify with "estimated" or "likely" ("Injured: ~5 estimated based on collapse footprint"). Only write "0 reported" when the scene genuinely shows no impact.\n• STRUCTURES — count visible Threatened / Damaged / Destroyed buildings from the image. Add construction-type detail ("Damaged: 12 single-storey residential; mixed timber/masonry").\n• RESPONSE — describe Resources Deployed (responders visible, vehicles on scene, equipment) and Gaps (what is clearly missing: "no heavy lift equipment visible", "no triage tent identified"). Use what the image actually shows, not zeros.\n• OUTLOOK — Projected Activity over next 6-24h, specific Concerns the responder should plan for (aftershock risk, secondary collapse, weather worsening). Always include a time horizon.\n\nNEVER include sections for: title, severity, summary, immediate_actions, GPS, date/time, hazard_type, casualty_status, casualty_count, fema_scale, hazus_category, recommended_skill — those live in separate fields. Stay focused on rich situational detail.\n\nExample SITUATION row:\nNarrative: Aerial view of a tightly-packed coastal neighbourhood after typhoon landfall. Roof failures dominate the foreground; debris flow runs east-west across the main road. Daylight, partial overcast — search teams operating without artificial light.\n\nExample STRUCTURES row:\nDamaged: ~30 single-storey timber-frame homes; partial roof loss\nDestroyed: 4 corner-lot houses, slab-only remaining\n\nExample RESPONSE row:\nResources deployed: 1 ambulance, 6 high-vis responders, 1 utility truck on the access road\nGaps: no heavy-lift / crane equipment visible; no triage tent identified; no fire suppression on scene',
+          'Report body 800-1800 chars. Five UPPERCASE section headings each on own line. Each section MUST be Label: value rows (no prose paragraphs). Sections in this order: SITUATION, PUBLIC IMPACT, STRUCTURES, RESPONSE, OUTLOOK. Rules: write a number when visible ("3 visible"); estimate with "likely" / "~5 estimated" when implied; "0 reported" only when scene truly shows zero. Include construction type in STRUCTURES. RESPONSE has both Resources deployed AND Gaps rows. OUTLOOK includes a time horizon. NEVER include rows for title, severity, summary, immediate_actions, GPS, date/time, hazard_type, casualty_*, fema_*, hazus_*, recommended_skill — those live in separate fields.\n\nFORMAT EXEMPLAR (mirror this row pattern in every report, vary the values):\nSITUATION\nNarrative: Concrete mid-rise partially collapsed; debris to knee height; daylight, partial overcast.\n\nPUBLIC IMPACT\nFatal: 0 reported\nInjured: ~3 estimated based on collapse footprint\nMissing: 2 likely\nDisplaced: 0 reported\n\nSTRUCTURES\nThreatened: 2 adjacent residential\nDamaged: 1 mid-rise concrete (partial collapse)\nDestroyed: 0\nConstruction Type: reinforced concrete\n\nRESPONSE\nResources deployed: 1 ambulance, 4 high-vis responders visible\nGaps: no heavy-lift crane, no triage tent, no fire suppression\n\nOUTLOOK\nProjected activity: search-and-rescue ops over next 6-12h; access via north flank only\nConcerns: secondary collapse risk from saturated debris over next 24h',
     },
     // NB: `gps` and `prepared_at` are intentionally NOT exposed to the
     // model. We saw the model drop leading digits ("19.20337" →
@@ -339,15 +350,27 @@ class LlmService {
     HardwareFallbackStore? hardwareStore,
   })  : _skills = skills ?? SkillsRegistry(),
         _hardwareStore = hardwareStore {
-    // Honor persisted GPU-failure sentinels at construction so the very
-    // first engine_create on this process boots on the safe path.
+    // Honor persisted hardware-fallback sentinels at construction so
+    // the first engine_create on this process boots on the safe path.
+    //
+    // NB: we DELIBERATELY no longer honor `forceCpuBackend` at boot.
+    // The Gemma 4 E2B .litertlm bundle has a DYNAMIC_UPDATE_SLICE
+    // node (1164) that XNNPack rejects at delegate-prepare time —
+    // CPU mode is 100% broken on this bundle. Persisting CPU would
+    // wedge the app on every cold launch. We still flip CPU in-process
+    // when GPU dies (so the user gets one usable retry within the
+    // session), but the next cold launch always retries GPU.
     final store = _hardwareStore;
     if (store != null) {
+      // Migration: clear forceCpu (broken on this bundle) and
+      // disableVision (poisoning was caused by boot-time warmup, now
+      // removed) so existing installs get vision back without needing
+      // an uninstall. New crashes will re-flip both as needed.
       if (store.readForceCpu()) {
-        _preferredBackend = PreferredBackend.cpu;
+        unawaited(store.clearForceCpu());
       }
       if (store.readDisableVision()) {
-        _visionDisabled = true;
+        unawaited(store.clearDisableVision());
       }
     }
   }
@@ -390,9 +413,13 @@ class LlmService {
 
   SkillsRegistry get skills => _skills;
 
-  /// Backend we'll try next time we (re)load the model. Drops to CPU
-  /// permanently if a generation throws "Can not find OpenCL library".
-  PreferredBackend _preferredBackend = PreferredBackend.gpu;
+  /// Backend used at every engine_create. Hardcoded to GPU — this
+  /// bundle's CPU XNNPack path rejects `DYNAMIC_UPDATE_SLICE` at node
+  /// 1164 and fails at delegate-prepare time, so a CPU fallback is
+  /// worse than no fallback. GPU crashes are recovered by disposing
+  /// the engine + flipping `_visionDisabled` (see
+  /// [_shouldFallbackToCpu]) and retrying on GPU.
+  final PreferredBackend _preferredBackend = PreferredBackend.gpu;
 
   /// The pack the engine is currently loaded against (or about to be on
   /// the next [ask]/[oneShot] call). Null until [setChatPack] / [setPack]
@@ -843,7 +870,7 @@ class LlmService {
     }
     final model = await _ensureModel(maxTokens: maxTokens);
     final systemPrompt = await _buildTriageSystemPrompt();
-    final userPrompt = _buildTriageUserPrompt(input);
+    final userPrompt = _buildTriageUserPrompt(input, includeImage: hasImage);
 
     if (kDebugMode) {
       final estTokens = ((systemPrompt.length + userPrompt.length) / 4).ceil();
@@ -898,17 +925,25 @@ class LlmService {
       );
       await chat.addQueryChunk(message);
       final genSw = Stopwatch()..start();
-      // 4-minute hard cap. Mali GPU + CPU sampler fallback can take
-      // 60-180s on a multimodal turn; anything beyond 240s is almost
-      // certainly a wedged native session (we saw "EGL Production
-      // fence didn't signal" loops hang the chat forever). Throw so
-      // the cubit can surface a "try again" error instead of leaving
-      // the user staring at the thinking spinner.
+      // 12-minute hard cap. On low-end Mali devices with a cold
+      // OpenCL context, the FIRST multimodal triage of the session
+      // can spend 9+ minutes in `engine_create` + vision-encoder
+      // prefill (one user reported 553 seconds). Subsequent turns in
+      // the same session warm up to 10-30s. Cutting earlier than 12
+      // minutes throws away a valid response — the Dart `.timeout`
+      // can't cancel the running FFI call, so the native side runs
+      // to completion regardless, and we'd just be losing the data
+      // it produced.
+      //
+      // Anything beyond 12 minutes IS almost certainly a wedged
+      // session (we have seen `EGL Production fence didn't signal`
+      // loops hang the chat forever), so the cap stays — just
+      // higher than before.
       final response = await chat.generateChatResponse().timeout(
-        const Duration(minutes: 4),
+        const Duration(minutes: 12),
         onTimeout: () {
           throw TimeoutException(
-            'Triage analysis exceeded 4 minutes; native session likely '
+            'Triage analysis exceeded 12 minutes; native session likely '
             'wedged on GPU pipeline. Retry the request.',
           );
         },
@@ -1368,51 +1403,43 @@ class LlmService {
     // jinja-rendered tool declaration is already paying for the
     // OpenAI-Chat-Completions overhead — we keep this prompt under ~700
     // tokens so prefill + image patches stay tractable on Mali GPU.
+    // Tight system prompt. Tool schema carries field shape; this
+    // prompt carries DECISION rules (observe / infer / hedge) that
+    // the schema can't express. Target ~250 tokens after chat-template
+    // overhead so the bundle's `prefill_1024` ceiling has headroom
+    // even after the tool jinja-render (~400-500 tokens). Earlier
+    // version was double this size, hit DYNAMIC_UPDATE_SLICE on chunk
+    // 2 because the KV cache slot allocator was sized for 1024 tokens.
     return '''
-You are Aegis, an offline emergency triage assistant. $speakRule
+You are Aegis offline triage. $speakRule
 
-Call the `render_triage_report` tool exactly ONCE per turn. No prose, no
-explanations, no extra tool calls.
+Call `render_triage_report` ONCE per turn. No prose. No extra tool calls.
 
-Be a careful observer. Triage reports are decision-grade — empty
-placeholders are useless. For every field:
+Decision rules:
+1. OBSERVE — count visible: structures, hazards, responders, weather,
+   light, debris.
+2. INFER — when implied but not directly visible, hedge:
+   "approximately", "likely", "~5 estimated", "based on collapse
+   footprint". Use ranges ("3-5"), not bare zeros.
+3. REPORT — "0 reported" only when scene truly shows zero.
 
-1. OBSERVE — describe exactly what the image and audio reveal: count
-   visible structures, identify hazards, note responder presence,
-   weather, light, debris pattern.
-2. INFER — when something isn't directly visible but the scene
-   implies it, write the inference WITH a confidence hedge:
-   "approximately", "estimated", "likely", "based on the collapse
-   footprint". Use ranges ("3-5") rather than bare zeros.
-3. REPORT — only fall back to "0 reported" when the scene genuinely
-   contains zero of that thing (e.g. no fire at a flood scene).
+Never write GPS, lat/lng, timestamps — app injects them. Never emit
+[INFERRED] / [UNKNOWN] / bracketed placeholders. Write a real value
+with a hedge.
 
-NEVER write GPS coordinates, latitude/longitude numbers, or timestamps
-anywhere — the app injects those from device sensors. Do not include
-"lat=", "lng=", "GPS", "Date/Time", or ISO-8601 timestamps.
-
-NEVER emit `[INFERRED — verify before submission]`, `[UNKNOWN]`, or
-any bracketed placeholder. Write a real value (with a hedge if
-needed). The responder will edit at confirm time.
-
-Image attached → grade damage: fill `damage_description` (2-3 sentence
-forensic observation), `hazus_category`, `fema_scale`.
-Voice/text mentions a person → fill `casualty_status`,
-`casualty_count`, `casualty_triage_color`.
-
-Skills (set `recommended_skill` if matching):
-- intake-survivor-statement — trapped / injured person interview
-- grade-damage-hazus — damage photo grading
-- disaster-report-generator — explicit SitRep / Flash / ICS-209 ask
-- plan-evacuation-route — "how do I get out"
-- compose-briefing — multi-incident overview
-- match-mesh-beacon — find a missing person via mesh beacon
+Skills for `recommended_skill`:
+intake-survivor-statement (trapped/injured),
+grade-damage-hazus (damage photo),
+disaster-report-generator (SitRep/Flash/ICS-209),
+plan-evacuation-route (route out),
+compose-briefing (multi-incident),
+match-mesh-beacon (missing person).
 ''';
   }
 
   static const int _incidentLogCharBudget = 1200;
 
-  String _buildTriageUserPrompt(TriageInput input) {
+  String _buildTriageUserPrompt(TriageInput input, {bool includeImage = true}) {
     final buf = StringBuffer();
     final user = input.userText.trim().isEmpty
         ? '(no spoken text — see attached evidence)'
@@ -1426,7 +1453,11 @@ Skills (set `recommended_skill` if matching):
     // the body.
     final evidence = <String>[];
     if (input.hasAudio) evidence.add('audio attached');
-    if (input.hasImage) evidence.add('image attached');
+    // Only advertise image evidence if the image actually reached the
+    // chat session. Vision-circuit-breaker turns drop the image at the
+    // service boundary, and lying to the model ("image attached" when
+    // it wasn't) made the report invent visual details.
+    if (input.hasImage && includeImage) evidence.add('image attached');
     if (input.gpsContext != null) evidence.add('gps fix present');
     if (evidence.isNotEmpty) buf.writeln('Evidence: ${evidence.join(', ')}');
 
@@ -1872,28 +1903,72 @@ Instructions:
     return cleaned.trim();
   }
 
+  /// Recovery predicate for transient GPU / vision-decode crashes.
+  /// We do NOT flip to CPU on this bundle — its CPU path is fatally
+  /// broken (XNNPack rejects `DYNAMIC_UPDATE_SLICE` at node 1164 at
+  /// delegate-prepare time, so prefill never starts on CPU). The only
+  /// usable backend is GPU. Recovery here:
+  ///   1. Dispose the engine so the next call rebuilds a clean session
+  ///      (avoids stale OpenCL buffer state poisoning the retry).
+  ///   2. Flip + persist `_visionDisabled` when the crash carried a
+  ///      vision / tensor-buffer signature (the image is what
+  ///      poisoned the GPU; future turns must skip it).
+  ///   3. Return true so the caller retries the SAME backend with
+  ///      vision stripped.
+  /// Returns false on the original "OpenCL shared lib totally missing"
+  /// case — that's a hard hardware failure; the caller should give up
+  /// rather than loop on a CPU path that doesn't work either.
   Future<bool> _shouldFallbackToCpu(Object error) async {
-    if (_preferredBackend == PreferredBackend.cpu) return false;
     if (!_isOpenClUnavailable(error)) return false;
-    _preferredBackend = PreferredBackend.cpu;
+    final lower = error.toString().toLowerCase();
+    final samplerDlopen = lower.contains('libliterttopkopenclsampler') ||
+        lower.contains('libliterttopkwebgpusampler');
+    if (samplerDlopen) {
+      // Sampler shared lib missing entirely → no usable backend on
+      // this bundle. Don't pretend a CPU retry will help — just
+      // bubble up so the cubit surfaces a clean error.
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] sampler shared lib missing; not retrying — '
+          'CPU path is XNNPack-incompatible on this bundle',
+        );
+      }
+      return false;
+    }
+
+    final visionSignature = lower.contains('convert_tensor_buffer') ||
+        lower.contains('litert_tensor_buffer') ||
+        lower.contains('llm_litert_compiled_model_executor') ||
+        lower.contains('clenqueuemapbuffer') ||
+        lower.contains('clenqueuewritebuffer') ||
+        lower.contains('stablehlo_composite') ||
+        lower.contains('dynamic_update_slice') ||
+        lower.contains('failed to allocate tensors');
+    if (visionSignature && !_visionDisabled) {
+      _visionDisabled = true;
+    }
     await _disposeModel();
-    // Persist the sentinel so the next cold launch starts on CPU and
-    // never re-hits the GPU path that just corrupted the context. Best-
-    // effort — a write failure shouldn't block the in-process recovery.
     final store = _hardwareStore;
-    if (store != null) {
+    if (store != null && visionSignature) {
       try {
-        await store.persistForceCpu();
+        await store.persistDisableVision();
         if (kDebugMode) {
           debugPrint(
-            '[Aegis][LLM] persisted forceCpuBackend=true after GPU crash',
+            '[Aegis][LLM] persisted disableVision=true after GPU '
+            'tensor-buffer / KV-cache failure',
           );
         }
       } on Object catch (e) {
         if (kDebugMode) {
-          debugPrint('[Aegis][LLM] persistForceCpu failed: $e');
+          debugPrint('[Aegis][LLM] persistDisableVision failed: $e');
         }
       }
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] GPU delegate failure — disposed engine, '
+        'visionDisabled=$_visionDisabled, retrying same GPU backend',
+      );
     }
     return true;
   }
@@ -2005,13 +2080,27 @@ Instructions:
     // after a prior session left GPU context dirty, or the driver
     // rejected the kernel batch. Force-fall to CPU so the next attempt
     // doesn't loop on the same broken delegate.
+    //
+    // NB: `convert_tensor_buffer` / `litert_tensor_buffer` / the
+    // `llm_litert_compiled_model_executor` runtime errors are ALSO
+    // GPU-side corruption signatures even when the model object is
+    // text-only at the Dart layer — the underlying engine's KV cache
+    // and prefill buffers live on the same poisoned OpenCL context.
+    // Catching them here means [_shouldFallbackToCpu] dominates over
+    // [_shouldFallbackToTextOnly] in the `generateReport` chain, so
+    // the engine actually rebuilds on CPU instead of retrying
+    // text-only on the same broken GPU handle.
     return message.contains('clenqueuewritebuffer') ||
+        message.contains('clenqueuemapbuffer') ||
         message.contains('failed to upload data to gpu') ||
         message.contains('delegatekernellitert') ||
         message.contains('stablehlo_composite') ||
         message.contains('dynamic_update_slice') ||
         message.contains('failed to create engine') ||
-        message.contains('failed to initialize kernel');
+        message.contains('failed to initialize kernel') ||
+        message.contains('convert_tensor_buffer') ||
+        message.contains('litert_tensor_buffer') ||
+        message.contains('llm_litert_compiled_model_executor');
   }
 
   Future<void> _install(VoiceModelPack pack) async {

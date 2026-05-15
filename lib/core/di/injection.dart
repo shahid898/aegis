@@ -117,16 +117,25 @@ Future<void> configureDependencies() async {
   )..start();
   sl.registerSingleton<AlertRouter>(alertRouter);
 
-  // Warm the Gemma 4 IT engine so the first real alert (and the first
-  // chat turn) isn't paying for shader compile + KV-cache prefill on a
-  // cold GPU. Gemma 4 IT is now the routing brain too, so a single warm-
-  // up covers both paths. If the chat pack isn't installed yet (fresh
-  // install, download cubit still running) the call is a logged no-op
-  // and the first alert just pays the cold-start tax once.
+  // Active pack + role set so the LLM is ready to lazy-load on the
+  // first real call. We intentionally DO NOT call `warmUp()` here.
+  //
+  // Boot-time warmup creates the LiteRT-LM engine eagerly with
+  // `supportImage: true, supportAudio: true` and runs a one-shot text
+  // decode through it. On the user's Mali device this primes the
+  // OpenCL command queue + KV cache state in a way that POISONS the
+  // first multimodal triage in the same process: the vision-encoder
+  // tensor reshape hits `DYNAMIC_UPDATE_SLICE failed to prepare` at
+  // node 1164 (text-warmup left a 2-D slice shape baked into the KV
+  // slot allocator that the vision path then can't expand).
+  //
+  // Branch `skills_and_triage` (no alert merge, no warmup) does not
+  // hit this. Disabling warmup restores that behavior. Trade-off:
+  // first alert routing pays the ~10-15s cold-start tax once; every
+  // alert after that is fast. Triage works on every turn.
   final llm = sl<LlmService>();
   llm.setChatPack(ModelCatalog.llmPack);
   llm.useChat();
-  unawaited(llm.warmUp());
 }
 
 /// Thin Hive-backed adapter for [LlmService]'s hardware-fallback
@@ -149,4 +158,10 @@ class _StorageHardwareFallbackStore implements HardwareFallbackStore {
 
   @override
   Future<void> persistDisableVision() => _storage.setDisableVision(true);
+
+  @override
+  Future<void> clearForceCpu() => _storage.setForceCpuBackend(false);
+
+  @override
+  Future<void> clearDisableVision() => _storage.setDisableVision(false);
 }

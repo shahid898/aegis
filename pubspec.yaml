@@ -125,6 +125,21 @@ dependencies:
   vibration: ^3.1.8
   wakelock_plus: ^1.4.0
 
+  # find-nearby-places skill: offline POI database (sqflite for indexed
+  # bbox + category queries) seeded at onboarding from OSM Overpass.
+  # http is used for the one-time Overpass POST during onboarding; all
+  # subsequent queries hit the local SQLite file.
+  sqflite: ^2.4.1
+  http: ^1.2.2
+
+  # Offline raster tile cache for the inline map card. Walks the tile
+  # pyramid for the user's region at zoom 11-16 during onboarding
+  # (~30 MB) and serves them from the local ObjectBox store thereafter.
+  # Lets the find-nearby-places map render with a real basemap when the
+  # device has no internet — same offline-first stance as the LLM + POI
+  # path.
+  flutter_map_tile_caching: ^10.1.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -150,3 +165,4 @@ flutter:
     - assets/skills/intake-survivor-statement/
     - assets/skills/disaster-report-generator/
     - assets/skills/match-mesh-beacon/
+    - assets/skills/find-nearby-places/

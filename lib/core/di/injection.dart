@@ -8,6 +8,7 @@ import '../alert/alert_briefing_sink.dart';
 import '../alert/alert_bridge.dart';
 import '../alert/alert_router.dart';
 import '../geo/country_resolver.dart';
+import '../places/places_repository.dart';
 import '../skills/skills_registry.dart';
 import '../llm/function_router.dart';
 import '../sms_classifier/sms_classifier.dart';
@@ -45,6 +46,12 @@ Future<void> configureDependencies() async {
   // "browse skills" debug screen). Loaded on first access via
   // SkillsRegistry.load() inside LlmService.triageStream.
   sl.registerSingleton<SkillsRegistry>(SkillsRegistry());
+
+  // Offline POI cache for find-nearby-places. Lazy: opens places.db on
+  // first read so apps that never invoke the skill don't pay sqflite
+  // init cost. Seeded once during onboarding by
+  // [OnboardingPlacesDownloader].
+  sl.registerSingleton<PlacesRepository>(PlacesRepository());
 
   // Reports archive — confirmed triage cards land here. Opens its own
   // Hive box at startup so the Reports page can read a fresh snapshot

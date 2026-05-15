@@ -11,6 +11,8 @@ import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 
 import '../../../core/alert/alert_briefing_sink.dart';
+import '../../../core/places/place.dart';
+import '../../../core/places/places_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
@@ -22,6 +24,7 @@ import '../../../core/voice/triage_report.dart';
 import '../../../core/voice/tts_service.dart';
 import '../../reports/data/report.dart';
 import '../../reports/data/reports_repository.dart';
+import 'package:latlong2/latlong.dart';
 
 part 'assistant_cubit.freezed.dart';
 
@@ -34,10 +37,34 @@ class ConversationTurn {
     this.report,
     this.userImage,
     this.userAudio,
+    this.mapQuery,
+    this.mapPlaces,
+    this.mapCenter,
   });
 
   final String user;
   final String assistant;
+
+  /// Set when Gemma 4 emitted a `render_map_view` tool call during this
+  /// chat turn. The cubit attaches the parsed query so the inline map
+  /// card can render `mapPlaces` against the user's centre point.
+  final MapViewQuery? mapQuery;
+
+  /// Result of running [PlacesRepository.findNearby] against the
+  /// model's requested categories + radius. Empty when the offline DB
+  /// returned zero hits.
+  final List<Place>? mapPlaces;
+
+  /// Resolved centre point used for the [PlacesRepository] query —
+  /// live GPS fix or onboarding region. Stored alongside the result so
+  /// the inline map can render the user pulse marker at the exact spot
+  /// the query ran against.
+  final LatLng? mapCenter;
+
+  bool get hasMap =>
+      mapQuery != null &&
+      mapCenter != null &&
+      (mapPlaces?.isNotEmpty ?? false);
 
   /// Structured triage analysis emitted by Gemma 4 via the
   /// `render_triage_report` native tool call. Non-null only on turns
@@ -152,6 +179,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     required String countryCode,
     StorageService? storage,
     AlertBriefingSink? briefingSink,
+    PlacesRepository? places,
     String? languageCode,
     Duration autoConfirmTimeout = const Duration(seconds: 30),
   })  : _recorder = recorder,
@@ -162,6 +190,7 @@ class AssistantCubit extends Cubit<AssistantState> {
         _countryCode = countryCode,
         _storage = storage,
         _briefingSink = briefingSink,
+        _places = places,
         _languageCode = languageCode,
         _autoConfirmTimeout = autoConfirmTimeout,
         super(AssistantState(languageCode: languageCode)) {
@@ -226,7 +255,11 @@ class AssistantCubit extends Cubit<AssistantState> {
   String _lastAssistantText = '';
   final StorageService? _storage;
   final AlertBriefingSink? _briefingSink;
+  final PlacesRepository? _places;
   String? _languageCode;
+  MapViewQuery? _pendingMapQuery;
+  List<Place>? _pendingMapPlaces;
+  LatLng? _pendingMapCenter;
 
   /// Currently-selected ISO-639 language code (mutable — see
   /// [changeLanguage]). Used by the home header to render the active
@@ -234,7 +267,7 @@ class AssistantCubit extends Cubit<AssistantState> {
   String? get currentLanguageCode => _languageCode;
 
   StreamSubscription<SttUpdate>? _sttSub;
-  StreamSubscription<String>? _llmSub;
+  StreamSubscription<ChatStreamEvent>? _llmSub;
   Timer? _autoConfirmTimer;
   StreamSubscription<AlertBriefing>? _briefingSub;
   AppLifecycleListener? _lifecycleListener;
@@ -767,6 +800,16 @@ class AssistantCubit extends Cubit<AssistantState> {
     final responseBuffer = StringBuffer();
     final pending = StringBuffer();
     var spokeAtLeastOne = false;
+    _pendingMapQuery = null;
+    _pendingMapPlaces = null;
+    _pendingMapCenter = null;
+    // Tracks the in-flight map-call resolution. Stream.listen's
+    // onData callback is *not* awaited by the SDK before onDone fires,
+    // so without this gate the listen loop restarts the mic while
+    // _resolveMapCall is still hitting sqflite + TTS, the mic catches
+    // its own playback, and we end up in an infinite tool-call echo
+    // loop. We await this future after the stream closes.
+    final mapCallFutures = <Future<void>>[];
 
     void flushSentences({bool force = false}) {
       final text = pending.toString();
@@ -786,12 +829,24 @@ class AssistantCubit extends Cubit<AssistantState> {
 
     final completer = Completer<void>();
     _llmSub = _llm.askStream(transcript).listen(
-      (chunk) {
-        if (chunk.isEmpty) return;
-        responseBuffer.write(chunk);
-        pending.write(chunk);
-        emit(state.copyWith(response: responseBuffer.toString()));
-        flushSentences();
+      (event) {
+        switch (event) {
+          case ChatTextChunk(:final token):
+            if (token.isEmpty) return;
+            responseBuffer.write(token);
+            pending.write(token);
+            emit(state.copyWith(response: responseBuffer.toString()));
+            flushSentences();
+          case ChatMapCall(:final query):
+            if (kDebugMode) {
+              debugPrint('[Aegis][Cubit] ChatMapCall $query');
+            }
+            // Kick off resolution but don't await inside the
+            // listener — Stream.listen ignores the returned Future
+            // and would fire onDone before this finishes. Track and
+            // drain after the stream closes.
+            mapCallFutures.add(_resolveMapCall(query));
+        }
       },
       onDone: () {
         if (!completer.isCompleted) completer.complete();
@@ -805,7 +860,27 @@ class AssistantCubit extends Cubit<AssistantState> {
     try {
       await completer.future;
       flushSentences(force: true);
-      if (spokeAtLeastOne) await _tts.whenIdle;
+      // Wait for any in-flight map-call resolutions to finish before
+      // we touch _pendingMapQuery / _pendingMapPlaces below.
+      if (mapCallFutures.isNotEmpty) {
+        await Future.wait(mapCallFutures);
+      }
+      // Drain TTS before returning. Two paths queue speech:
+      //   • streaming text chunks set [spokeAtLeastOne]
+      //   • tool calls (render_map_view) queue TTS inside
+      //     [_resolveMapCall]
+      // The listen loop restarts mic capture as soon as _runChat
+      // returns — if TTS is still playing the mic catches its own
+      // playback, STT transcribes it, and Gemma re-fires the tool in
+      // an infinite loop. Waiting for whenIdle + a short post-TTS
+      // grace gap breaks that.
+      if (spokeAtLeastOne || _pendingMapQuery != null) {
+        await _tts.whenIdle;
+        // Trailing speaker decay + STT VAD warm-up window. Skipping
+        // this lets the mic catch the tail end of the system audio
+        // through the device's preamp.
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+      }
 
       final assistantText = responseBuffer.toString().trim();
       _lastReport = null;
@@ -817,11 +892,20 @@ class AssistantCubit extends Cubit<AssistantState> {
       emit(state.copyWith(
         turns: List.unmodifiable(<ConversationTurn>[
           ...state.turns,
-          ConversationTurn(user: transcript.trim(), assistant: assistantText),
+          ConversationTurn(
+            user: transcript.trim(),
+            assistant: assistantText,
+            mapQuery: _pendingMapQuery,
+            mapPlaces: _pendingMapPlaces,
+            mapCenter: _pendingMapCenter,
+          ),
         ]),
         transcript: '',
         response: '',
       ));
+      _pendingMapQuery = null;
+      _pendingMapPlaces = null;
+      _pendingMapCenter = null;
     } on Object catch (e, st) {
       if (kDebugMode) {
         debugPrint('[Aegis][Cubit] _runChat failed: $e');
@@ -838,6 +922,88 @@ class AssistantCubit extends Cubit<AssistantState> {
       await _llmSub?.cancel();
       _llmSub = null;
     }
+  }
+
+  /// Run the offline POI lookup Gemma asked for, queue the spoken
+  /// summary onto the TTS pipeline, and stash the result so [_runChat]
+  /// can attach it to the conversation turn. Best-effort — repository
+  /// failures emit a warning but never abort the chat reply.
+  Future<void> _resolveMapCall(MapViewQuery query) async {
+    final repo = _places;
+    if (repo == null) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] map call ignored — no PlacesRepository');
+      }
+      return;
+    }
+    try {
+      // Queue the spoken summary first so it can prefetch + start
+      // synthesising while we hit GPS + sqflite. TTS pipeline buffers
+      // internally, so the user hears it the moment the map mounts.
+      final spoken = query.spokenSummary.trim();
+      if (spoken.isNotEmpty) {
+        emit(state.copyWith(stage: AssistantStage.speaking));
+        unawaited(_tts.enqueue(spoken));
+      }
+      final center = await _resolveMapCenter();
+      if (center == null) {
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][Cubit] map call: no usable centre (no GPS, no region)',
+          );
+        }
+        return;
+      }
+      final hits = await repo.findNearby(
+        categories: query.categories,
+        center: center,
+        radiusKm: query.radiusKm,
+      );
+      _pendingMapQuery = query;
+      _pendingMapPlaces = hits;
+      _pendingMapCenter = center;
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] map call resolved hits=${hits.length} '
+          'radius=${query.radiusKm}km',
+        );
+      }
+    } on Object catch (e, st) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] _resolveMapCall failed: $e');
+        debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] map stack');
+      }
+    }
+  }
+
+  /// Resolve a usable centre: live GPS fix → onboarding region →
+  /// `null`. Uses a tight 3 s GPS timeout to keep chat latency
+  /// predictable; offline-only devices fall back to the region picked
+  /// during onboarding.
+  Future<LatLng?> _resolveMapCenter() async {
+    try {
+      final serviceOn = await Geolocator.isLocationServiceEnabled();
+      if (serviceOn) {
+        final permission = await Geolocator.checkPermission();
+        if (permission != LocationPermission.denied &&
+            permission != LocationPermission.deniedForever) {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+              timeLimit: Duration(seconds: 3),
+            ),
+          );
+          return LatLng(pos.latitude, pos.longitude);
+        }
+      }
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] live GPS failed: $e');
+      }
+    }
+    final region = _storage?.selectedRegion;
+    if (region == null) return null;
+    return LatLng(region.latitude, region.longitude);
   }
 
   Future<void> _runTriage(

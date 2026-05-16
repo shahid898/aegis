@@ -42,6 +42,14 @@ abstract class ModelDownloadState with _$ModelDownloadState {
     @Default('') String tilesProgressMessage,
     @Default(0.0) double tilesProgressFraction,
     @Default(0) int tilesCached,
+
+    /// Monotonic plan-wide progress in [0, 1]. Stored (not computed)
+    /// so we can clamp it against the previous value and prevent the
+    /// progress bar from rolling backwards — which used to happen
+    /// because `pack.approxBytes` is a hardcoded estimate and the
+    /// server-reported Content-Length sometimes flips the denominator
+    /// mid-flight. The cubit updates this via `_advanceProgress(...)`.
+    @Default(0.0) double overallFraction,
   }) = _ModelDownloadState;
 
   const ModelDownloadState._();
@@ -51,23 +59,6 @@ abstract class ModelDownloadState with _$ModelDownloadState {
     Set<String> installedIds,
   ) =>
       ModelDownloadState(plan: plan, installedIds: installedIds);
-
-  /// Fraction of the *whole plan* completed, not just the current pack.
-  double get overallFraction {
-    if (plan.isEmpty) return 1;
-    final totalPacks = plan.length;
-    final completedPacks =
-        plan.where((p) => installedIds.contains(p.id)).length;
-    final current = currentPack;
-    double currentFrac = 0;
-    if (current != null &&
-        !installedIds.contains(current.id) &&
-        currentTotalBytes > 0) {
-      currentFrac =
-          (currentReceivedBytes / currentTotalBytes).clamp(0.0, 1.0);
-    }
-    return ((completedPacks + currentFrac) / totalPacks).clamp(0.0, 1.0);
-  }
 
   bool get isTerminal =>
       status == DownloadStatus.completed ||
@@ -117,7 +108,48 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     for (final pack in state.plan) {
       if (await _registry.isInstalled(pack)) installed.add(pack.id);
     }
-    emit(state.copyWith(installedIds: installed));
+    // Seed the monotonic progress floor from already-installed packs
+    // so resuming an interrupted onboarding doesn't snap the bar back
+    // to 0%.
+    final seededFraction = state.plan.isEmpty
+        ? 1.0
+        : installed.length / state.plan.length;
+    emit(state.copyWith(
+      installedIds: installed,
+      overallFraction: seededFraction.clamp(0.0, 1.0),
+    ));
+  }
+
+  /// Monotonic progress update. The bar is never allowed to roll
+  /// backwards — fluctuations from `Content-Length` flipping between
+  /// pack.approxBytes (catalog estimate) and the server's real value
+  /// would otherwise cause visible jitter. Caller passes the *candidate*
+  /// fraction for the current moment; we keep whichever is larger.
+  void _advanceProgress(double candidate) {
+    final next = candidate.clamp(0.0, 1.0);
+    if (next <= state.overallFraction) return;
+    emit(state.copyWith(overallFraction: next));
+  }
+
+  /// Plan-wide fraction inferred from how many packs are fully installed
+  /// plus the current pack's within-pack progress. Used as input to the
+  /// monotonic [_advanceProgress] gate.
+  double _candidateFraction({
+    required VoiceModelPack? pack,
+    required int received,
+    required int total,
+  }) {
+    final plan = state.plan;
+    if (plan.isEmpty) return 1.0;
+    final completed =
+        plan.where((p) => state.installedIds.contains(p.id)).length;
+    double inFlightFrac = 0;
+    if (pack != null &&
+        !state.installedIds.contains(pack.id) &&
+        total > 0) {
+      inFlightFrac = (received / total).clamp(0.0, 1.0);
+    }
+    return ((completed + inFlightFrac) / plan.length).clamp(0.0, 1.0);
   }
 
   /// Download every pack in [state.plan] that is not yet installed,
@@ -152,6 +184,7 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     await _seedPlaces();
     await _seedTiles();
 
+    _advanceProgress(1.0);
     emit(state.copyWith(
       status: DownloadStatus.completed,
       currentPack: null,
@@ -245,6 +278,7 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
         .install(pack)
         .listen(
       (p) {
+        final total = p.totalBytes > 0 ? p.totalBytes : pack.approxBytes;
         emit(state.copyWith(
           status: switch (p.phase) {
             ModelDownloadPhase.downloading => DownloadStatus.downloading,
@@ -253,7 +287,14 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
             ModelDownloadPhase.done => DownloadStatus.downloading,
           },
           currentReceivedBytes: p.receivedBytes,
-          currentTotalBytes: p.totalBytes > 0 ? p.totalBytes : pack.approxBytes,
+          currentTotalBytes: total,
+        ));
+        // Push the monotonic plan-wide progress forward. Won't roll
+        // backwards even if Content-Length flips mid-stream.
+        _advanceProgress(_candidateFraction(
+          pack: pack,
+          received: p.receivedBytes,
+          total: total,
         ));
       },
       onError: completer.completeError,
@@ -261,6 +302,13 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
         emit(state.copyWith(
           installedIds: {...state.installedIds, pack.id},
         ));
+        // Snap to the post-pack floor so any sub-1.0 jitter in the
+        // last frame can't leave the bar short of where it should be.
+        final completed =
+            state.plan.where((p) => state.installedIds.contains(p.id)).length;
+        _advanceProgress(state.plan.isEmpty
+            ? 1.0
+            : completed / state.plan.length);
         completer.complete();
       },
       cancelOnError: true,

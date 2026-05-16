@@ -16,9 +16,21 @@ class RegionPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return BlocProvider(
-      create: (_) =>
-          RegionCubit(sl<StorageService>(), sl<CountryResolver>()),
+      create: (_) => RegionCubit(
+        sl<StorageService>(),
+        sl<CountryResolver>(),
+        labels: RegionLabels(
+          current: l.regionLabelCurrent,
+          currentWithCountry: l.regionLabelCurrentWithCountry,
+          selected: l.regionLabelSelected,
+          selectedWithCountry: l.regionLabelSelectedWithCountry,
+          errorServiceOff: l.regionErrorServiceOff,
+          errorPermissionDenied: l.regionErrorPermissionDenied,
+          errorReadFailed: l.regionErrorReadFailed,
+        ),
+      ),
       child: const _RegionView(),
     );
   }

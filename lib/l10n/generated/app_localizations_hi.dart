@@ -89,14 +89,42 @@ class AppLocalizationsHi extends AppLocalizations {
   String get regionDownloadCta => 'इस क्षेत्र के लिए डेटा डाउनलोड करें';
 
   @override
-  String get downloadTitle => 'ऑफ़लाइन आवाज़ तैयार करें';
+  String get regionLabelCurrent => 'वर्तमान स्थान';
 
   @override
-  String get downloadHeading => 'आवाज़ मॉडल डाउनलोड हो रहे हैं';
+  String regionLabelCurrentWithCountry(String country) {
+    return 'वर्तमान स्थान ($country)';
+  }
+
+  @override
+  String get regionLabelSelected => 'चयनित क्षेत्र';
+
+  @override
+  String regionLabelSelectedWithCountry(String country) {
+    return 'चयनित क्षेत्र ($country)';
+  }
+
+  @override
+  String get regionErrorServiceOff =>
+      'GPS उपयोग के लिए स्थान सेवाएँ चालू करें।';
+
+  @override
+  String get regionErrorPermissionDenied => 'स्थान अनुमति अस्वीकृत।';
+
+  @override
+  String regionErrorReadFailed(String error) {
+    return 'स्थान नहीं पढ़ सका: $error';
+  }
+
+  @override
+  String get downloadTitle => 'ऑफ़लाइन उपयोग के लिए तैयार करें';
+
+  @override
+  String get downloadHeading => 'ऑफ़लाइन डेटा डाउनलोड हो रहा है';
 
   @override
   String get downloadBody =>
-      'इस एक बार के डाउनलोड के बाद Aegis पूरी तरह ऑफ़लाइन काम करता है। आप छोड़कर केवल-टेक्स्ट मोड में चला सकते हैं।';
+      'इस एक बार के डाउनलोड के बाद Aegis पूरी तरह ऑफ़लाइन काम करता है — आवाज़ मॉडल, आपके क्षेत्र के निकट स्थान, और मानचित्र टाइलें।';
 
   @override
   String downloadPercentComplete(String percent) {
@@ -124,6 +152,18 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get downloadFailed => 'डाउनलोड विफल।';
+
+  @override
+  String get downloadFirstInstallNote =>
+      'पहली बार इंस्टॉल में 10–15 मिनट लगते हैं अच्छे कनेक्शन पर। डाउनलोड बैकग्राउंड में जारी रहेगा — स्क्रीन लॉक कर सकते हैं, पर बेहतर गति के लिए Wi-Fi पर रहें।';
+
+  @override
+  String get downloadAllRequired =>
+      'आपातकाल में ऑफ़लाइन काम करने के लिए Aegis को हर पैक डिवाइस पर चाहिए। इस चरण को छोड़ नहीं सकते।';
+
+  @override
+  String get downloadCheckConnection =>
+      'अपना कनेक्शन जाँचें और पुनः प्रयास करें। डाउनलोड वहीं से जारी होगा जहाँ रुका था।';
 
   @override
   String get accessibilityTitle => 'कुछ प्रश्न';
@@ -209,4 +249,148 @@ class AppLocalizationsHi extends AppLocalizations {
   @override
   String get permissionNotificationsBody =>
       'आपातकालीन ब्रीफिंग और बीकन अलर्ट देने के लिए ज़रूरी।';
+
+  @override
+  String get homeSubtitle => 'ऑफ़लाइन. तैयार.';
+
+  @override
+  String get homeStartTriage => 'ट्रायाज शुरू करें';
+
+  @override
+  String get homeReports => 'रिपोर्ट';
+
+  @override
+  String get homeTakePhoto => 'फ़ोटो लें';
+
+  @override
+  String get homePickFromGallery => 'गैलरी से चुनें';
+
+  @override
+  String get homeSave => 'सहेजें';
+
+  @override
+  String get homeVoiceDegraded => 'आवाज़ मॉडल इंस्टॉल नहीं। SOS अब भी उपलब्ध।';
+
+  @override
+  String get homeSomethingWentWrong => 'कुछ गलत हुआ।';
+
+  @override
+  String get homeNoEmergencyContact =>
+      'कोई आपातकालीन संपर्क सहेजा नहीं। सेटिंग्स में जोड़ें।';
+
+  @override
+  String homeCouldNotDial(String phone) {
+    return '$phone के लिए डायलर नहीं खोला जा सका।';
+  }
+
+  @override
+  String get stageIdle => 'शुरू करने के लिए दबाएँ · SOS के लिए लंबा दबाएँ';
+
+  @override
+  String get stagePreparing => 'तैयार हो रहा है…';
+
+  @override
+  String get stageListening => 'सुन रहा हूँ… रोकने के लिए दबाएँ';
+
+  @override
+  String get stageTranscribing => 'लिप्यंतरण…';
+
+  @override
+  String get stageThinking => 'सोच रहा हूँ… बाधित करने के लिए दबाएँ';
+
+  @override
+  String get stageSpeaking => 'Aegis बोल रहा है · रोकने के लिए दबाएँ';
+
+  @override
+  String get stageAwaitingConfirmation =>
+      'ऊपर का कार्ड देखें · पुष्टि या अस्वीकार करें';
+
+  @override
+  String get stageDegraded => 'आवाज़ अक्षम — SOS दबाएँ';
+
+  @override
+  String get stageError => 'पुनः प्रयास के लिए दबाएँ';
+
+  @override
+  String get thinkingReadingEvidence => 'आपके साक्ष्य पढ़ रहा हूँ…';
+
+  @override
+  String get thinkingLookingAtImage => 'छवि और ऑडियो देख रहा हूँ…';
+
+  @override
+  String get thinkingDraftingReport => 'रिपोर्ट तैयार कर रहा हूँ…';
+
+  @override
+  String get thinkingStillWorking => 'अभी काम चल रहा है — एक मिनट लग सकता है।';
+
+  @override
+  String get thinkingFinalisingReport =>
+      'लगभग पूरा — रिपोर्ट अंतिम रूप दे रहा हूँ।';
+
+  @override
+  String get thinkingGeneric => 'सोच रहा हूँ…';
+
+  @override
+  String get thinkingComposingReply => 'उत्तर लिख रहा हूँ…';
+
+  @override
+  String get thinkingStillThinking =>
+      'अभी सोच रहा हूँ — पहला उत्तर थोड़ा वक़्त लेता है।';
+
+  @override
+  String get thinkingFinalisingReply =>
+      'लगभग पूरा — उत्तर अंतिम रूप दे रहा हूँ।';
+
+  @override
+  String get reportsTitle => 'ट्रायाज रिपोर्ट';
+
+  @override
+  String get reportsEmpty => 'अभी कोई रिपोर्ट नहीं।';
+
+  @override
+  String get reportsEmptyHint =>
+      'रिपोर्ट बनाने के लिए होम स्क्रीन पर \"ट्रायाज शुरू करें\" दबाएँ।';
+
+  @override
+  String get reportsDetailTitle => 'रिपोर्ट';
+
+  @override
+  String get reportsDelete => 'रिपोर्ट हटाएँ?';
+
+  @override
+  String get reportsDeleteBody =>
+      'यह रिपोर्ट अभिलेख से हट जाएगी। पूर्ववत नहीं किया जा सकता।';
+
+  @override
+  String get reportsCancel => 'रद्द करें';
+
+  @override
+  String get reportsDeleteAction => 'हटाएँ';
+
+  @override
+  String get reportsNoInputText => '(कोई इनपुट टेक्स्ट नहीं)';
+
+  @override
+  String get reportsYouEvidenceOnly =>
+      'आप: (कोई बोला गया टेक्स्ट नहीं — साक्ष्य संलग्न)';
+
+  @override
+  String reportsYouQuote(String text) {
+    return 'आप: \"$text\"';
+  }
+
+  @override
+  String get reportsLegacy => '(पुरानी रिपोर्ट — कोई संरचित डेटा नहीं)';
+
+  @override
+  String get reportsDescribeScene => 'दृश्य का वर्णन करें';
+
+  @override
+  String get reportsDescribeHint =>
+      'उदा. \"दो-मंज़िला घर, छत आंशिक रूप से गिरी, एक बुज़ुर्ग महिला सामने के दरवाज़े पर फँसी\"';
+
+  @override
+  String homePhotoCaptureFailed(String error) {
+    return 'फ़ोटो कैप्चर विफल: $error';
+  }
 }

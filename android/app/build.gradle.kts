@@ -52,4 +52,10 @@ flutter {
 }
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // ConstraintLayout drives the redesigned full-screen alert takeover
+    // (vertical-bias body surface + button row). NestedScrollView lives
+    // in androidx.core for the scrollable body fallback when an alert
+    // body is unusually long.
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("androidx.core:core-ktx:1.13.1")
 }

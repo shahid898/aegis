@@ -8,7 +8,6 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/places/onboarding_places_downloader.dart';
 import '../../../../core/places/tile_cache_downloader.dart';
 import '../../../../core/storage/storage_service.dart';
-import '../../../../core/voice/model_pack.dart';
 import '../../../../core/voice/model_pack_repository.dart';
 import '../../../../core/voice/model_registry.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -69,72 +68,67 @@ class _DownloadView extends StatelessWidget {
                       height: 1.35,
                     ),
                   ),
-                  const SizedBox(height: 24),
-                  _OverallProgress(state: state),
-                  if (state.placesProgressMessage.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Row(
+                  const SizedBox(height: 14),
+                  // Time-expectation banner. Sets the user up so a long
+                  // wait feels deliberate instead of broken. Tinted
+                  // surface so it reads as info, not warning.
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    decoration: BoxDecoration(
+                      color: AegisColors.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (state.status == DownloadStatus.seedingPlaces) ...[
-                          const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 8),
-                        ] else ...[
-                          const Icon(Icons.check_circle_outline,
-                              size: 16, color: AegisColors.primary),
-                          const SizedBox(width: 6),
-                        ],
+                        const Icon(Icons.schedule_outlined,
+                            size: 18, color: AegisColors.primary),
+                        const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            state.placesProgressMessage,
+                            l.downloadFirstInstallNote,
                             style: const TextStyle(
-                              color: AegisColors.onSurfaceMuted,
                               fontSize: 13,
+                              height: 1.4,
+                              color: AegisColors.onSurface,
                             ),
                           ),
                         ),
                       ],
                     ),
-                  ],
-                  if (state.tilesProgressMessage.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        if (state.status == DownloadStatus.seedingTiles) ...[
-                          const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 8),
-                        ] else ...[
-                          const Icon(Icons.check_circle_outline,
-                              size: 16, color: AegisColors.primary),
-                          const SizedBox(width: 6),
-                        ],
-                        Expanded(
-                          child: Text(
-                            state.tilesProgressMessage,
-                            style: const TextStyle(
-                              color: AegisColors.onSurfaceMuted,
-                              fontSize: 13,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  const SizedBox(height: 20),
+                  ),
+                  const SizedBox(height: 18),
+                  // Centered linear-progress stack. The per-pack ListView
+                  // was removed because it surfaced internal pack ids
+                  // (`llm-gemma-4-…`, `tts-piper-…`) that mean nothing to
+                  // a non-engineer user. One progress bar + an optional
+                  // places/tiles status line is enough signal.
                   Expanded(
-                    child: ListView.separated(
-                      itemCount: state.plan.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 8),
-                      itemBuilder: (_, i) => _PackTile(
-                        pack: state.plan[i],
-                        state: state,
+                    child: Center(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _OverallProgress(state: state),
+                            if (state.placesProgressMessage.isNotEmpty) ...[
+                              const SizedBox(height: 14),
+                              _SecondaryProgressRow(
+                                message: state.placesProgressMessage,
+                                inFlight: state.status ==
+                                    DownloadStatus.seedingPlaces,
+                              ),
+                            ],
+                            if (state.tilesProgressMessage.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              _SecondaryProgressRow(
+                                message: state.tilesProgressMessage,
+                                inFlight: state.status ==
+                                    DownloadStatus.seedingTiles,
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -164,121 +158,92 @@ class _OverallProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final pct = (state.overallFraction * 100).round();
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // Big percentage readout — the primary thing the user wants to
+        // know while they wait. Aligned center for visual balance.
+        Center(
+          child: Text(
+            '$pct%',
+            style: const TextStyle(
+              fontSize: 56,
+              fontWeight: FontWeight.w700,
+              color: AegisColors.primary,
+              letterSpacing: -1,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         LinearProgressIndicator(
           value: state.overallFraction == 0 ? null : state.overallFraction,
-          minHeight: 10,
-          borderRadius: BorderRadius.circular(5),
+          minHeight: 12,
+          borderRadius: BorderRadius.circular(6),
         ),
-        const SizedBox(height: 8),
-        Text(
-          AppLocalizations.of(context).downloadPercentComplete(
-            (state.overallFraction * 100).toStringAsFixed(0),
+        const SizedBox(height: 10),
+        Center(
+          child: Text(
+            l.downloadPercentComplete(pct.toString()),
+            style: const TextStyle(
+              color: AegisColors.onSurfaceMuted,
+              fontSize: 13,
+            ),
           ),
-          style: const TextStyle(color: AegisColors.onSurfaceMuted),
         ),
       ],
     );
   }
 }
 
-class _PackTile extends StatelessWidget {
-  const _PackTile({required this.pack, required this.state});
-
-  final VoiceModelPack pack;
-  final ModelDownloadState state;
-
-  @override
-  Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context);
-    final installed = state.installedIds.contains(pack.id);
-    final isCurrent = state.currentPack?.id == pack.id && !installed;
-    final sizeMb = (pack.approxBytes / (1024 * 1024)).toStringAsFixed(0);
-
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            _StatusIcon(installed: installed, current: isCurrent, state: state),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    pack.displayName,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    installed
-                        ? l.downloadPackInstalled
-                        : isCurrent
-                            ? _currentSubtitle(l, state, sizeMb)
-                            : l.downloadPackPending(sizeMb),
-                    style: const TextStyle(
-                      color: AegisColors.onSurfaceMuted,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _currentSubtitle(
-      AppLocalizations l, ModelDownloadState state, String sizeMb) {
-    return switch (state.status) {
-      DownloadStatus.downloading => l.downloadPackProgress(
-          (state.currentReceivedBytes / (1024 * 1024)).toStringAsFixed(1),
-          sizeMb,
-        ),
-      DownloadStatus.verifying => l.downloadVerifying,
-      DownloadStatus.extracting => l.downloadExtracting,
-      _ => '$sizeMb MB',
-    };
-  }
-}
-
-class _StatusIcon extends StatelessWidget {
-  const _StatusIcon({
-    required this.installed,
-    required this.current,
-    required this.state,
+/// Compact "places / tiles" status row. Shows a spinner while the
+/// step is in-flight, a checkmark afterwards. Centered so it sits
+/// under the main progress bar without competing with it.
+class _SecondaryProgressRow extends StatelessWidget {
+  const _SecondaryProgressRow({
+    required this.message,
+    required this.inFlight,
   });
 
-  final bool installed;
-  final bool current;
-  final ModelDownloadState state;
+  final String message;
+  final bool inFlight;
 
   @override
   Widget build(BuildContext context) {
-    if (installed) {
-      return const Icon(Icons.check_circle, color: AegisColors.primary);
-    }
-    if (current && state.status == DownloadStatus.downloading) {
-      return const SizedBox(
-        width: 22,
-        height: 22,
-        child: CircularProgressIndicator(strokeWidth: 2.4),
-      );
-    }
-    return const Icon(Icons.radio_button_unchecked,
-        color: AegisColors.onSurfaceMuted);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        if (inFlight)
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        else
+          const Icon(Icons.check_circle_outline,
+              size: 16, color: AegisColors.primary),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: AegisColors.onSurfaceMuted,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
+
+// _PackTile + _StatusIcon were removed when the per-pack list view was
+// replaced by a single centered progress bar. Internal pack ids
+// (`llm-gemma-4-…`, `tts-piper-…`) were leaking through `pack.displayName`
+// and adding no user-meaningful signal beyond the overall percentage.
 
 class _Actions extends StatelessWidget {
   const _Actions({required this.state});
@@ -287,8 +252,13 @@ class _Actions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+
+    // Failure: surface error + Retry. No skip — model packs are
+    // mandatory for offline operation. User retries (Range-resumes
+    // from where it stopped) or backgrounds the app.
     if (state.status == DownloadStatus.failed) {
       return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             padding: const EdgeInsets.all(12),
@@ -296,33 +266,38 @@ class _Actions extends StatelessWidget {
               color: AegisColors.danger.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Text(
-              state.errorMessage ?? l.downloadFailed,
-              style: const TextStyle(color: AegisColors.danger),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  state.errorMessage ?? l.downloadFailed,
+                  style: const TextStyle(color: AegisColors.danger),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  l.downloadCheckConnection,
+                  style: const TextStyle(
+                    color: AegisColors.danger,
+                    fontSize: 13,
+                    height: 1.35,
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => context.go(AppRoute.accessibility.path),
-                  child: Text(l.actionSkipForNow),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => context.read<ModelDownloadCubit>().start(),
-                  child: Text(l.actionRetry),
-                ),
-              ),
-            ],
+          FilledButton.icon(
+            onPressed: () => context.read<ModelDownloadCubit>().start(),
+            icon: const Icon(Icons.refresh),
+            label: Text(l.actionRetry),
           ),
         ],
       );
     }
 
+    // Completion: full-width Continue. Caller's listener auto-navigates
+    // after a short delay so this button is mostly a fallback for the
+    // rare race where the listener missed the state flip.
     if (state.allInstalled || state.status == DownloadStatus.completed) {
       return FilledButton(
         onPressed: () => context.go(AppRoute.accessibility.path),
@@ -330,28 +305,44 @@ class _Actions extends StatelessWidget {
       );
     }
 
-    return Row(
+    // In-flight: disabled-Continue + mandatory note. We deliberately
+    // do NOT expose a Skip button. Aegis depends on every pack being
+    // resident for offline emergency operation; the prior "Skip for
+    // now" path left users on the home screen with the mic button
+    // greyed out and no clear remediation. Better UX: lock them on
+    // this screen until the packs finish (it runs in the background,
+    // they can lock the device).
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Expanded(
-          child: OutlinedButton(
-            onPressed: () {
-              context.read<ModelDownloadCubit>().skip();
-              context.go(AppRoute.accessibility.path);
-            },
-            child: Text(l.actionSkipForNow),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Text(
+            l.downloadAllRequired,
+            style: const TextStyle(
+              color: AegisColors.onSurfaceMuted,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
           ),
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: FilledButton(
-            onPressed: state.status == DownloadStatus.downloading
-                ? () => context.read<ModelDownloadCubit>().cancel()
-                : () => context.read<ModelDownloadCubit>().start(),
-            child: Text(
-              state.status == DownloadStatus.downloading
-                  ? l.actionCancel
-                  : l.actionResume,
-            ),
+        FilledButton(
+          onPressed: null,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  color: Colors.white70,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(l.actionContinue),
+            ],
           ),
         ),
       ],

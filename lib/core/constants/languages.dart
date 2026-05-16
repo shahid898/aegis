@@ -2,13 +2,15 @@ import '../../models/language_option.dart';
 
 /// Curated list of 140 languages with native-script labels.
 /// Ordered loosely by global speaker count so defaults feel sensible.
+/// Hindi promoted directly after English so India users — the largest
+/// Aegis target market — see their language without scrolling.
 class SupportedLanguages {
   const SupportedLanguages._();
 
   static const List<LanguageOption> all = [
     LanguageOption(code: 'en', englishName: 'English', nativeName: 'English'),
-    LanguageOption(code: 'zh', englishName: 'Mandarin Chinese', nativeName: '中文'),
     LanguageOption(code: 'hi', englishName: 'Hindi', nativeName: 'हिन्दी'),
+    LanguageOption(code: 'zh', englishName: 'Mandarin Chinese', nativeName: '中文'),
     LanguageOption(code: 'es', englishName: 'Spanish', nativeName: 'Español'),
     LanguageOption(code: 'ar', englishName: 'Arabic', nativeName: 'العربية'),
     LanguageOption(code: 'bn', englishName: 'Bengali', nativeName: 'বাংলা'),

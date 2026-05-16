@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../home/widgets/aegis_audio_chip.dart';
 import '../../home/widgets/triage_report_card.dart';
 import '../data/report.dart';
@@ -21,9 +22,10 @@ class ReportsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final repo = sl<ReportsRepository>();
     return Scaffold(
-      appBar: AppBar(title: const Text('Triage Reports')),
+      appBar: AppBar(title: Text(l.reportsTitle)),
       body: ValueListenableBuilder<List<Report>>(
         valueListenable: repo.listenable,
         builder: (context, reports, _) {
@@ -59,6 +61,7 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -71,18 +74,18 @@ class _EmptyState extends StatelessWidget {
               color: AegisColors.onSurfaceMuted,
             ),
             const SizedBox(height: 12),
-            const Text(
-              'No reports yet.',
-              style: TextStyle(
+            Text(
+              l.reportsEmpty,
+              style: const TextStyle(
                 color: AegisColors.onSurfaceMuted,
                 fontSize: 16,
               ),
             ),
             const SizedBox(height: 4),
-            const Text(
-              'Tap "Start triage" on the home screen to draft one.',
+            Text(
+              l.reportsEmptyHint,
               textAlign: TextAlign.center,
-              style: TextStyle(
+              style: const TextStyle(
                 color: AegisColors.onSurfaceMuted,
                 fontSize: 14,
               ),
@@ -107,6 +110,7 @@ class _ReportTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final time =
         DateFormat.yMMMd().add_jm().format(report.createdAt.toLocal());
     final decoded = report.report;
@@ -127,19 +131,16 @@ class _ReportTile extends StatelessWidget {
         return await showDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
-                title: const Text('Delete report?'),
-                content: const Text(
-                  'This removes the report from the archive. '
-                  'Cannot be undone.',
-                ),
+                title: Text(l.reportsDelete),
+                content: Text(l.reportsDeleteBody),
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.of(ctx).pop(false),
-                    child: const Text('Cancel'),
+                    child: Text(l.reportsCancel),
                   ),
                   FilledButton(
                     onPressed: () => Navigator.of(ctx).pop(true),
-                    child: const Text('Delete'),
+                    child: Text(l.reportsDeleteAction),
                   ),
                 ],
               ),
@@ -150,7 +151,7 @@ class _ReportTile extends StatelessWidget {
       child: ListTile(
         leading: const Icon(Icons.dashboard_customize_outlined),
         title: Text(
-          title.isEmpty ? '(no input text)' : title,
+          title.isEmpty ? l.reportsNoInputText : title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -219,12 +220,13 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final time = DateFormat.yMMMd()
         .add_jm()
         .format(widget.report.createdAt.toLocal());
     final decoded = widget.report.report;
     return Scaffold(
-      appBar: AppBar(title: const Text('Report')),
+      appBar: AppBar(title: Text(l.reportsDetailTitle)),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -250,8 +252,8 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
                     const SizedBox(height: 4),
                     Text(
                       widget.report.userText.isEmpty
-                          ? 'You: (no spoken text — evidence attached)'
-                          : 'You: "${widget.report.userText}"',
+                          ? l.reportsYouEvidenceOnly
+                          : l.reportsYouQuote(widget.report.userText),
                       style: const TextStyle(fontSize: 14, height: 1.35),
                     ),
                   ],
@@ -292,8 +294,10 @@ class _ReportDetailPageState extends State<_ReportDetailPage> {
                   padding: const EdgeInsets.symmetric(vertical: 32),
                   child: Center(
                     child: Text(
-                      '(legacy report — no structured payload)',
-                      style: TextStyle(color: AegisColors.onSurfaceMuted),
+                      l.reportsLegacy,
+                      style: const TextStyle(
+                        color: AegisColors.onSurfaceMuted,
+                      ),
                     ),
                   ),
                 )

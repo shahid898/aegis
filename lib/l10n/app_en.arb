@@ -48,10 +48,32 @@
   "regionLocating": "Locating...",
   "regionTapHint": "Tap the map to select your district",
   "regionDownloadCta": "Download data for this region",
+  "regionLabelCurrent": "Current location",
+  "regionLabelCurrentWithCountry": "Current location ({country})",
+  "@regionLabelCurrentWithCountry": {
+    "placeholders": {
+      "country": { "type": "String" }
+    }
+  },
+  "regionLabelSelected": "Selected area",
+  "regionLabelSelectedWithCountry": "Selected area ({country})",
+  "@regionLabelSelectedWithCountry": {
+    "placeholders": {
+      "country": { "type": "String" }
+    }
+  },
+  "regionErrorServiceOff": "Turn on location services to use GPS.",
+  "regionErrorPermissionDenied": "Location permission denied.",
+  "regionErrorReadFailed": "Could not read location: {error}",
+  "@regionErrorReadFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
 
-  "downloadTitle": "Prepare offline voice",
-  "downloadHeading": "Downloading voice models",
-  "downloadBody": "Aegis works fully offline after this one-time download. You can skip and run in text-only mode.",
+  "downloadTitle": "Prepare for offline use",
+  "downloadHeading": "Downloading offline data",
+  "downloadBody": "Aegis works fully offline after this one-time download — voice models, your region's nearby places, and map tiles.",
   "downloadPercentComplete": "{percent}% complete",
   "@downloadPercentComplete": {
     "placeholders": {
@@ -75,6 +97,9 @@
   "downloadVerifying": "Verifying…",
   "downloadExtracting": "Extracting…",
   "downloadFailed": "Download failed.",
+  "downloadFirstInstallNote": "First install takes 10–15 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.",
+  "downloadAllRequired": "Aegis needs every pack on-device to work offline in an emergency. You can't skip this step.",
+  "downloadCheckConnection": "Check your connection and try again. The download will resume from where it stopped.",
 
   "accessibilityTitle": "A few questions",
   "accessibilityBody": "Your answers shape how Aegis routes you in an emergency. Answers stay on this device.",
@@ -108,5 +133,67 @@
   "permissionLocationTitle": "Location",
   "permissionLocationBody": "Needed to recommend routes and nearby shelters in your area.",
   "permissionNotificationsTitle": "Notifications",
-  "permissionNotificationsBody": "Needed to deliver emergency briefings and beacon alerts."
+  "permissionNotificationsBody": "Needed to deliver emergency briefings and beacon alerts.",
+
+  "homeSubtitle": "Offline. Ready.",
+  "homeStartTriage": "Start triage",
+  "homeReports": "Reports",
+  "homeTakePhoto": "Take a photo",
+  "homePickFromGallery": "Pick from gallery",
+  "homeSave": "Save",
+  "homeVoiceDegraded": "Voice models are not installed. You can still use SOS.",
+  "homeSomethingWentWrong": "Something went wrong.",
+  "homeNoEmergencyContact": "No emergency contact saved. Add one in settings.",
+  "homeCouldNotDial": "Could not open dialer for {phone}.",
+  "@homeCouldNotDial": {
+    "placeholders": {
+      "phone": { "type": "String" }
+    }
+  },
+
+  "stageIdle": "Tap to start · long-press for SOS",
+  "stagePreparing": "Getting ready…",
+  "stageListening": "Listening… tap to stop",
+  "stageTranscribing": "Transcribing…",
+  "stageThinking": "Thinking… tap to interrupt",
+  "stageSpeaking": "Aegis is speaking · tap to stop",
+  "stageAwaitingConfirmation": "Review the card above · confirm or reject",
+  "stageDegraded": "Voice disabled — tap SOS",
+  "stageError": "Tap to retry",
+
+  "thinkingReadingEvidence": "Reading your evidence…",
+  "thinkingLookingAtImage": "Looking at the image and audio…",
+  "thinkingDraftingReport": "Drafting the report…",
+  "thinkingStillWorking": "Still working — this can take a minute.",
+  "thinkingFinalisingReport": "Almost there — finalising the report.",
+  "thinkingGeneric": "Thinking…",
+  "thinkingComposingReply": "Composing a reply…",
+  "thinkingStillThinking": "Still thinking — first reply takes a moment.",
+  "thinkingFinalisingReply": "Almost there — finalising the reply.",
+
+  "reportsTitle": "Triage Reports",
+  "reportsEmpty": "No reports yet.",
+  "reportsEmptyHint": "Tap \"Start triage\" on the home screen to draft one.",
+  "reportsDetailTitle": "Report",
+  "reportsDelete": "Delete report?",
+  "reportsDeleteBody": "This removes the report from the archive. Cannot be undone.",
+  "reportsCancel": "Cancel",
+  "reportsDeleteAction": "Delete",
+  "reportsNoInputText": "(no input text)",
+  "reportsYouEvidenceOnly": "You: (no spoken text — evidence attached)",
+  "reportsYouQuote": "You: \"{text}\"",
+  "@reportsYouQuote": {
+    "placeholders": {
+      "text": { "type": "String" }
+    }
+  },
+  "reportsLegacy": "(legacy report — no structured payload)",
+  "reportsDescribeScene": "Describe the scene",
+  "reportsDescribeHint": "eg. \"Two-storey house, partial roof collapse, one elderly woman trapped near the front door\"",
+  "homePhotoCaptureFailed": "Photo capture failed: {error}",
+  "@homePhotoCaptureFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  }
 }

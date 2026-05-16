@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Soft circular halo behind the warning glyph. White with low alpha
+     so the gradient bleeds through; the warning glyph reads as the
+     focal point. Kotlin attaches a pulse animation to this view. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="#33FFFFFF" />
+    <stroke
+        android:width="2dp"
+        android:color="#80FFFFFF" />
+</shape>

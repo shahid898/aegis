@@ -1,5 +1,7 @@
 package com.resq.aegis.alert
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
@@ -8,7 +10,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.WindowManager
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.TextView
 import com.resq.aegis.MainActivity
 import com.resq.aegis.R
@@ -43,6 +47,7 @@ class FullScreenAlertActivity : Activity() {
     private var alert: AlertEvent? = null
     private val handler = Handler(Looper.getMainLooper())
     private var autoOpenScheduled = false
+    private var haloPulse: ObjectAnimator? = null
 
     private val autoOpenRunnable = Runnable {
         autoOpenScheduled = false
@@ -76,8 +81,37 @@ class FullScreenAlertActivity : Activity() {
             AlertForegroundService.dismiss(this)
             finishAndRemoveTask()
         }
+        // Primary CTA: skip the countdown and open Flutter immediately.
+        // Cancelling auto-open first avoids a double-launch race when
+        // the timer fires within the same tap window.
+        findViewById<android.widget.Button>(R.id.alert_open_now)?.setOnClickListener {
+            cancelAutoOpen()
+            launchFlutterUi()
+        }
 
+        startHaloPulse()
         scheduleAutoOpen()
+    }
+
+    /**
+     * Slow, rhythmic scale pulse on the icon halo. Hand-rolled rather than
+     * an XML animator so we can cancel it cleanly in [onDestroy] without
+     * leaking a `ValueAnimator` across activity recreation.
+     */
+    private fun startHaloPulse() {
+        val halo = findViewById<View>(R.id.alert_icon_halo) ?: return
+        haloPulse?.cancel()
+        haloPulse = ObjectAnimator.ofPropertyValuesHolder(
+            halo,
+            android.animation.PropertyValuesHolder.ofFloat("scaleX", 1.0f, 1.18f),
+            android.animation.PropertyValuesHolder.ofFloat("scaleY", 1.0f, 1.18f),
+        ).apply {
+            duration = 950L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -89,6 +123,8 @@ class FullScreenAlertActivity : Activity() {
 
     override fun onDestroy() {
         cancelAutoOpen()
+        haloPulse?.cancel()
+        haloPulse = null
         super.onDestroy()
     }
 

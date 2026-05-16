@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
@@ -454,6 +455,16 @@ class AssistantCubit extends Cubit<AssistantState> {
     if (!_voiceReady) return;
     if (_conversationActive) return;
     _conversationActive = true;
+    // Cue the user that mic capture is starting. Two channels because
+    // either alone is easy to miss under stress:
+    //   * HapticFeedback.mediumImpact — tactile thump, works even when
+    //     the device is on silent (which an emergency user may have).
+    //   * SystemSound.click — short audible click via the OS; respects
+    //     ringer volume and avoids shipping a custom asset.
+    // Both are best-effort: failures (e.g. emulator without vibrator)
+    // silently fall through so the conversation loop still runs.
+    unawaited(HapticFeedback.mediumImpact());
+    unawaited(SystemSound.play(SystemSoundType.click));
     // Preserve any briefing bubble already rendered in [turns] so the
     // user can keep reading the alert summary while asking follow-ups.
     // Only clear in-flight transcript / response — those belong to a

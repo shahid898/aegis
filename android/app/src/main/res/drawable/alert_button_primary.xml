@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Primary CTA: opaque white pill. High contrast against the crimson
+     gradient so a panicked tap lands on the intended target. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFF" />
+    <corners android:radius="100dp" />
+</shape>

@@ -24,6 +24,7 @@ import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/stt_service.dart';
 import '../../../core/voice/tts_service.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../reports/data/reports_repository.dart';
 import '../cubit/assistant_cubit.dart';
 import '../widgets/aegis_audio_chip.dart';
@@ -104,13 +105,13 @@ class _HomeViewState extends State<_HomeView> {
             children: [
               ListTile(
                 leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Take a photo'),
+                title: Text(AppLocalizations.of(context).homeTakePhoto),
                 onTap: () =>
                     Navigator.of(sheetContext).pop(ImageSource.camera),
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Pick from gallery'),
+                title: Text(AppLocalizations.of(context).homePickFromGallery),
                 onTap: () =>
                     Navigator.of(sheetContext).pop(ImageSource.gallery),
               ),
@@ -135,7 +136,11 @@ class _HomeViewState extends State<_HomeView> {
     } on Object catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Photo capture failed: $e')),
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).homePhotoCaptureFailed(e.toString()),
+            ),
+          ),
         );
       }
     }
@@ -158,7 +163,7 @@ class _HomeViewState extends State<_HomeView> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'Describe the scene',
+                AppLocalizations.of(sheetContext).reportsDescribeScene,
                 style: Theme.of(sheetContext).textTheme.titleMedium,
               ),
               const SizedBox(height: 12),
@@ -167,18 +172,17 @@ class _HomeViewState extends State<_HomeView> {
                 minLines: 3,
                 maxLines: 6,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  border: const OutlineInputBorder(),
                   hintText:
-                      'eg. "Two-storey house, partial roof collapse, '
-                      'one elderly woman trapped near the front door"',
+                      AppLocalizations.of(sheetContext).reportsDescribeHint,
                 ),
               ),
               const SizedBox(height: 12),
               FilledButton(
                 onPressed: () =>
                     Navigator.of(sheetContext).pop(controller.text),
-                child: const Text('Save'),
+                child: Text(AppLocalizations.of(sheetContext).homeSave),
               ),
             ],
           ),
@@ -203,6 +207,7 @@ class _HomeViewState extends State<_HomeView> {
       // and the PENDING/CONFIRMED state machine without a real telco. The FAB
       // is dropped in release builds via `kDebugMode`.
       floatingActionButton: const _AlertSimulatorFab(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
@@ -238,18 +243,20 @@ class _HomeViewState extends State<_HomeView> {
     );
   }
 
-  String _buttonHint(AssistantStage stage) => switch (stage) {
-        AssistantStage.idle => 'Tap to start · long-press for SOS',
-        AssistantStage.preparing => 'Getting ready…',
-        AssistantStage.listening => 'Listening… tap to stop',
-        AssistantStage.transcribing => 'Transcribing…',
-        AssistantStage.thinking => 'Thinking… tap to interrupt',
-        AssistantStage.speaking => 'Aegis is speaking · tap to stop',
-        AssistantStage.awaitingConfirmation =>
-          'Review the card above · confirm or reject',
-        AssistantStage.degraded => 'Voice disabled — tap SOS',
-        AssistantStage.error => 'Tap to retry',
-      };
+  String _buttonHint(AssistantStage stage) {
+    final l = AppLocalizations.of(context);
+    return switch (stage) {
+      AssistantStage.idle => l.stageIdle,
+      AssistantStage.preparing => l.stagePreparing,
+      AssistantStage.listening => l.stageListening,
+      AssistantStage.transcribing => l.stageTranscribing,
+      AssistantStage.thinking => l.stageThinking,
+      AssistantStage.speaking => l.stageSpeaking,
+      AssistantStage.awaitingConfirmation => l.stageAwaitingConfirmation,
+      AssistantStage.degraded => l.stageDegraded,
+      AssistantStage.error => l.stageError,
+    };
+  }
 }
 
 class _Header extends StatelessWidget {
@@ -258,6 +265,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -266,13 +274,13 @@ class _Header extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Aegis',
+                l.appName,
                 style: Theme.of(context).textTheme.headlineMedium,
               ),
               const SizedBox(height: 4),
-              const Text(
-                'Offline. Ready.',
-                style: TextStyle(
+              Text(
+                l.homeSubtitle,
+                style: const TextStyle(
                   color: AegisColors.onSurfaceMuted,
                   fontSize: 14,
                 ),
@@ -281,21 +289,15 @@ class _Header extends StatelessWidget {
           ),
         ),
         IconButton.filledTonal(
-          tooltip: 'Start triage',
+          tooltip: l.homeStartTriage,
           onPressed: () => context.read<AssistantCubit>().startTriage(),
           icon: const Icon(Icons.medical_information_outlined),
         ),
         const SizedBox(width: 2),
         IconButton.filledTonal(
-          tooltip: 'Reports',
+          tooltip: l.homeReports,
           onPressed: () => context.push(AppRoute.reports.path),
           icon: const Icon(Icons.assignment_outlined),
-        ),
-        const SizedBox(width: 2),
-        IconButton.filledTonal(
-          tooltip: 'Find nearby places',
-          onPressed: () => context.push(AppRoute.findPlaces.path),
-          icon: const Icon(Icons.map_outlined),
         ),
         const SizedBox(width: 5),
         _LanguageDropdown(currentCode: state.languageCode),
@@ -625,10 +627,17 @@ class _Bubble extends StatelessWidget {
 
   final String label;
   final String text;
+
+  /// [CrossAxisAlignment.end] = user-side (right-aligned, no top-left
+  /// corner rounding). [CrossAxisAlignment.start] = assistant-side
+  /// (left-aligned, no top-right corner rounding). Anything else
+  /// falls through to centered which we don't actually use.
   final CrossAxisAlignment align;
   final Color background;
   final Uint8List? image;
   final Uint8List? audio;
+
+  bool get _isUser => align == CrossAxisAlignment.end;
 
   @override
   Widget build(BuildContext context) {
@@ -638,62 +647,97 @@ class _Bubble extends StatelessWidget {
     if (!hasText && !hasImage && !hasAudio) {
       return const SizedBox.shrink();
     }
-    return Column(
-      crossAxisAlignment: align,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: AegisColors.onSurfaceMuted,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.4,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+
+    // Asymmetric bubble tail — user bubbles flatten their bottom-right
+    // corner, assistant bubbles flatten bottom-left. Reads as a clear
+    // chat-style "speech tail" without needing a custom painter.
+    final radius = BorderRadius.only(
+      topLeft: const Radius.circular(18),
+      topRight: const Radius.circular(18),
+      bottomLeft: Radius.circular(_isUser ? 18 : 4),
+      bottomRight: Radius.circular(_isUser ? 4 : 18),
+    );
+
+    // Cap bubble width at ~80% of screen so a long assistant paragraph
+    // doesn't stretch edge-to-edge — that reads as a paragraph block,
+    // not a chat message.
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final maxBubbleWidth = screenWidth * 0.80;
+
+    final bubble = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxBubbleWidth),
+      child: Column(
+        crossAxisAlignment:
+            _isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: AegisColors.onSurfaceMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (hasImage)
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 220),
-                    child: Image.memory(
-                      image!,
-                      fit: BoxFit.cover,
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: background,
+              borderRadius: radius,
+              border: Border.all(
+                color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (hasImage)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 220),
+                      child: Image.memory(
+                        image!,
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
-                ),
-              if (hasImage && (hasAudio || hasText))
-                const SizedBox(height: 8),
-              if (hasAudio)
-                AegisAudioChip(
-                  key: ValueKey(audio!.length),
-                  wavBytes: audio!,
-                ),
-              if (hasAudio && hasText) const SizedBox(height: 8),
-              if (hasText)
-                Text(
-                  text,
-                  style: const TextStyle(
-                    color: AegisColors.onSurface,
-                    fontSize: 16,
-                    height: 1.35,
+                if (hasImage && (hasAudio || hasText))
+                  const SizedBox(height: 8),
+                if (hasAudio)
+                  AegisAudioChip(
+                    key: ValueKey(audio!.length),
+                    wavBytes: audio!,
                   ),
-                ),
-            ],
+                if (hasAudio && hasText) const SizedBox(height: 8),
+                if (hasText)
+                  Text(
+                    text,
+                    textAlign: _isUser ? TextAlign.right : TextAlign.left,
+                    style: const TextStyle(
+                      color: AegisColors.onSurface,
+                      fontSize: 16,
+                      height: 1.35,
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+
+    // Row controls horizontal placement of the bubble inside the
+    // parent's full-width slot. User → right, assistant → left.
+    return Row(
+      mainAxisAlignment:
+          _isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Flexible(child: bubble),
       ],
     );
   }
@@ -738,28 +782,30 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
     super.dispose();
   }
 
-  String _statusLine(int s) {
+  String _statusLine(BuildContext context, int s) {
+    final l = AppLocalizations.of(context);
     if (widget.forReport) {
-      if (s < 8) return 'Reading your evidence…';
-      if (s < 25) return 'Looking at the image and audio…';
-      if (s < 60) return 'Drafting the report…';
-      if (s < 120) return 'Still working — this can take a minute.';
-      return 'Almost there — finalising the report.';
+      if (s < 8) return l.thinkingReadingEvidence;
+      if (s < 25) return l.thinkingLookingAtImage;
+      if (s < 60) return l.thinkingDraftingReport;
+      if (s < 120) return l.thinkingStillWorking;
+      return l.thinkingFinalisingReport;
     }
-    if (s < 6) return 'Thinking…';
-    if (s < 20) return 'Composing a reply…';
-    if (s < 60) return 'Still thinking — first reply takes a moment.';
-    return 'Almost there — finalising the reply.';
+    if (s < 6) return l.thinkingGeneric;
+    if (s < 20) return l.thinkingComposingReply;
+    if (s < 60) return l.thinkingStillThinking;
+    return l.thinkingFinalisingReply;
   }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Aegis',
-          style: TextStyle(
+        Text(
+          l.appName,
+          style: const TextStyle(
             color: AegisColors.onSurfaceMuted,
             fontSize: 12,
             fontWeight: FontWeight.w600,
@@ -792,7 +838,7 @@ class _ThinkingBubbleState extends State<_ThinkingBubble> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      _statusLine(_seconds),
+                      _statusLine(context, _seconds),
                       style: const TextStyle(
                         color: AegisColors.onSurface,
                         fontSize: 15,
@@ -824,10 +870,10 @@ class _StatusLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final message = switch (state.stage) {
-      AssistantStage.degraded =>
-        'Voice models are not installed. You can still use SOS.',
-      AssistantStage.error => state.errorMessage ?? 'Something went wrong.',
+      AssistantStage.degraded => l.homeVoiceDegraded,
+      AssistantStage.error => state.errorMessage ?? l.homeSomethingWentWrong,
       _ => null,
     };
     if (message == null) return const SizedBox.shrink();
@@ -886,8 +932,8 @@ class _PttButton extends StatelessWidget {
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        width: 220,
-        height: 220,
+        width: 140,
+        height: 140,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           gradient: RadialGradient(
@@ -899,8 +945,8 @@ class _PttButton extends StatelessWidget {
               color: startColor.withValues(
                 alpha: isActiveConversation ? 0.55 : 0.35,
               ),
-              blurRadius: isActiveConversation ? 68 : 48,
-              spreadRadius: isActiveConversation ? 10 : 6,
+              blurRadius: isActiveConversation ? 44 : 32,
+              spreadRadius: isActiveConversation ? 6 : 4,
             ),
           ],
         ),
@@ -911,7 +957,7 @@ class _PttButton extends StatelessWidget {
                   ? (isListening ? Icons.graphic_eq : Icons.stop_rounded)
                   : Icons.mic,
           color: Colors.white,
-          size: 88,
+          size: 56,
         ),
       ),
     );
@@ -922,7 +968,11 @@ class _PttButton extends StatelessWidget {
     final contacts = storage.emergencyContacts;
     final firstPhone = contacts.isEmpty ? null : contacts.first.phone;
 
+    // Capture context-dependent objects up front so we can use them
+    // after the async cancel + GPS wait without the analyzer flagging
+    // `use_build_context_synchronously`.
     final messenger = ScaffoldMessenger.of(context);
+    final l = AppLocalizations.of(context);
 
     if (context.mounted) {
       await context.read<AssistantCubit>().cancel();
@@ -953,9 +1003,7 @@ class _PttButton extends StatelessWidget {
 
     if (firstPhone == null) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('No emergency contact saved. Add one in settings.'),
-        ),
+        SnackBar(content: Text(l.homeNoEmergencyContact)),
       );
       return;
     }
@@ -967,28 +1015,29 @@ class _PttButton extends StatelessWidget {
     );
     if (!launched) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not open dialer for $firstPhone.')),
+        SnackBar(content: Text(l.homeCouldNotDial(firstPhone))),
       );
     }
   }
 }
 
-/// Floating action button shown only in debug builds. Opens a sheet with
-/// canned alert payloads + a free-text option that drive
+/// Compact floating action button shown only in debug builds. Opens a
+/// sheet with canned alert payloads + a free-text option that drive
 /// `AlertBridge.simulate(...)` so we can exercise the wake-app pipeline
-/// without a real SMS / SIM.
+/// without a real SMS / SIM. Sized small + pinned bottom-right so it
+/// doesn't compete with the mic button for visual weight.
 class _AlertSimulatorFab extends StatelessWidget {
   const _AlertSimulatorFab();
 
   @override
   Widget build(BuildContext context) {
-    return FloatingActionButton.extended(
+    return FloatingActionButton.small(
       heroTag: 'aegis-debug-alert-sim',
       backgroundColor: AegisColors.danger,
       foregroundColor: Colors.white,
-      icon: const Icon(Icons.bolt),
-      label: const Text('Simulate alert'),
+      tooltip: 'Simulate alert',
       onPressed: () => _open(context),
+      child: const Icon(Icons.bolt, size: 20),
     );
   }
 

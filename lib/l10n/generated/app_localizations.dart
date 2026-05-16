@@ -248,22 +248,64 @@ abstract class AppLocalizations {
   /// **'Download data for this region'**
   String get regionDownloadCta;
 
+  /// No description provided for @regionLabelCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'Current location'**
+  String get regionLabelCurrent;
+
+  /// No description provided for @regionLabelCurrentWithCountry.
+  ///
+  /// In en, this message translates to:
+  /// **'Current location ({country})'**
+  String regionLabelCurrentWithCountry(String country);
+
+  /// No description provided for @regionLabelSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected area'**
+  String get regionLabelSelected;
+
+  /// No description provided for @regionLabelSelectedWithCountry.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected area ({country})'**
+  String regionLabelSelectedWithCountry(String country);
+
+  /// No description provided for @regionErrorServiceOff.
+  ///
+  /// In en, this message translates to:
+  /// **'Turn on location services to use GPS.'**
+  String get regionErrorServiceOff;
+
+  /// No description provided for @regionErrorPermissionDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Location permission denied.'**
+  String get regionErrorPermissionDenied;
+
+  /// No description provided for @regionErrorReadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not read location: {error}'**
+  String regionErrorReadFailed(String error);
+
   /// No description provided for @downloadTitle.
   ///
   /// In en, this message translates to:
-  /// **'Prepare offline voice'**
+  /// **'Prepare for offline use'**
   String get downloadTitle;
 
   /// No description provided for @downloadHeading.
   ///
   /// In en, this message translates to:
-  /// **'Downloading voice models'**
+  /// **'Downloading offline data'**
   String get downloadHeading;
 
   /// No description provided for @downloadBody.
   ///
   /// In en, this message translates to:
-  /// **'Aegis works fully offline after this one-time download. You can skip and run in text-only mode.'**
+  /// **'Aegis works fully offline after this one-time download — voice models, your region\'s nearby places, and map tiles.'**
   String get downloadBody;
 
   /// No description provided for @downloadPercentComplete.
@@ -307,6 +349,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Download failed.'**
   String get downloadFailed;
+
+  /// No description provided for @downloadFirstInstallNote.
+  ///
+  /// In en, this message translates to:
+  /// **'First install takes 10–15 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.'**
+  String get downloadFirstInstallNote;
+
+  /// No description provided for @downloadAllRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Aegis needs every pack on-device to work offline in an emergency. You can\'t skip this step.'**
+  String get downloadAllRequired;
+
+  /// No description provided for @downloadCheckConnection.
+  ///
+  /// In en, this message translates to:
+  /// **'Check your connection and try again. The download will resume from where it stopped.'**
+  String get downloadCheckConnection;
 
   /// No description provided for @accessibilityTitle.
   ///
@@ -457,6 +517,264 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Needed to deliver emergency briefings and beacon alerts.'**
   String get permissionNotificationsBody;
+
+  /// No description provided for @homeSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline. Ready.'**
+  String get homeSubtitle;
+
+  /// No description provided for @homeStartTriage.
+  ///
+  /// In en, this message translates to:
+  /// **'Start triage'**
+  String get homeStartTriage;
+
+  /// No description provided for @homeReports.
+  ///
+  /// In en, this message translates to:
+  /// **'Reports'**
+  String get homeReports;
+
+  /// No description provided for @homeTakePhoto.
+  ///
+  /// In en, this message translates to:
+  /// **'Take a photo'**
+  String get homeTakePhoto;
+
+  /// No description provided for @homePickFromGallery.
+  ///
+  /// In en, this message translates to:
+  /// **'Pick from gallery'**
+  String get homePickFromGallery;
+
+  /// No description provided for @homeSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get homeSave;
+
+  /// No description provided for @homeVoiceDegraded.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice models are not installed. You can still use SOS.'**
+  String get homeVoiceDegraded;
+
+  /// No description provided for @homeSomethingWentWrong.
+  ///
+  /// In en, this message translates to:
+  /// **'Something went wrong.'**
+  String get homeSomethingWentWrong;
+
+  /// No description provided for @homeNoEmergencyContact.
+  ///
+  /// In en, this message translates to:
+  /// **'No emergency contact saved. Add one in settings.'**
+  String get homeNoEmergencyContact;
+
+  /// No description provided for @homeCouldNotDial.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open dialer for {phone}.'**
+  String homeCouldNotDial(String phone);
+
+  /// No description provided for @stageIdle.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap to start · long-press for SOS'**
+  String get stageIdle;
+
+  /// No description provided for @stagePreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Getting ready…'**
+  String get stagePreparing;
+
+  /// No description provided for @stageListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening… tap to stop'**
+  String get stageListening;
+
+  /// No description provided for @stageTranscribing.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing…'**
+  String get stageTranscribing;
+
+  /// No description provided for @stageThinking.
+  ///
+  /// In en, this message translates to:
+  /// **'Thinking… tap to interrupt'**
+  String get stageThinking;
+
+  /// No description provided for @stageSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Aegis is speaking · tap to stop'**
+  String get stageSpeaking;
+
+  /// No description provided for @stageAwaitingConfirmation.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the card above · confirm or reject'**
+  String get stageAwaitingConfirmation;
+
+  /// No description provided for @stageDegraded.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice disabled — tap SOS'**
+  String get stageDegraded;
+
+  /// No description provided for @stageError.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap to retry'**
+  String get stageError;
+
+  /// No description provided for @thinkingReadingEvidence.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading your evidence…'**
+  String get thinkingReadingEvidence;
+
+  /// No description provided for @thinkingLookingAtImage.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking at the image and audio…'**
+  String get thinkingLookingAtImage;
+
+  /// No description provided for @thinkingDraftingReport.
+  ///
+  /// In en, this message translates to:
+  /// **'Drafting the report…'**
+  String get thinkingDraftingReport;
+
+  /// No description provided for @thinkingStillWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Still working — this can take a minute.'**
+  String get thinkingStillWorking;
+
+  /// No description provided for @thinkingFinalisingReport.
+  ///
+  /// In en, this message translates to:
+  /// **'Almost there — finalising the report.'**
+  String get thinkingFinalisingReport;
+
+  /// No description provided for @thinkingGeneric.
+  ///
+  /// In en, this message translates to:
+  /// **'Thinking…'**
+  String get thinkingGeneric;
+
+  /// No description provided for @thinkingComposingReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Composing a reply…'**
+  String get thinkingComposingReply;
+
+  /// No description provided for @thinkingStillThinking.
+  ///
+  /// In en, this message translates to:
+  /// **'Still thinking — first reply takes a moment.'**
+  String get thinkingStillThinking;
+
+  /// No description provided for @thinkingFinalisingReply.
+  ///
+  /// In en, this message translates to:
+  /// **'Almost there — finalising the reply.'**
+  String get thinkingFinalisingReply;
+
+  /// No description provided for @reportsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Triage Reports'**
+  String get reportsTitle;
+
+  /// No description provided for @reportsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No reports yet.'**
+  String get reportsEmpty;
+
+  /// No description provided for @reportsEmptyHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap \"Start triage\" on the home screen to draft one.'**
+  String get reportsEmptyHint;
+
+  /// No description provided for @reportsDetailTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Report'**
+  String get reportsDetailTitle;
+
+  /// No description provided for @reportsDelete.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete report?'**
+  String get reportsDelete;
+
+  /// No description provided for @reportsDeleteBody.
+  ///
+  /// In en, this message translates to:
+  /// **'This removes the report from the archive. Cannot be undone.'**
+  String get reportsDeleteBody;
+
+  /// No description provided for @reportsCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get reportsCancel;
+
+  /// No description provided for @reportsDeleteAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Delete'**
+  String get reportsDeleteAction;
+
+  /// No description provided for @reportsNoInputText.
+  ///
+  /// In en, this message translates to:
+  /// **'(no input text)'**
+  String get reportsNoInputText;
+
+  /// No description provided for @reportsYouEvidenceOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'You: (no spoken text — evidence attached)'**
+  String get reportsYouEvidenceOnly;
+
+  /// No description provided for @reportsYouQuote.
+  ///
+  /// In en, this message translates to:
+  /// **'You: \"{text}\"'**
+  String reportsYouQuote(String text);
+
+  /// No description provided for @reportsLegacy.
+  ///
+  /// In en, this message translates to:
+  /// **'(legacy report — no structured payload)'**
+  String get reportsLegacy;
+
+  /// No description provided for @reportsDescribeScene.
+  ///
+  /// In en, this message translates to:
+  /// **'Describe the scene'**
+  String get reportsDescribeScene;
+
+  /// No description provided for @reportsDescribeHint.
+  ///
+  /// In en, this message translates to:
+  /// **'eg. \"Two-storey house, partial roof collapse, one elderly woman trapped near the front door\"'**
+  String get reportsDescribeHint;
+
+  /// No description provided for @homePhotoCaptureFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Photo capture failed: {error}'**
+  String homePhotoCaptureFailed(String error);
 }
 
 class _AppLocalizationsDelegate

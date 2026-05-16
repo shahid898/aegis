@@ -254,6 +254,10 @@ class AppLocalizationsHi extends AppLocalizations {
   String get homeSubtitle => 'ऑफ़लाइन. तैयार.';
 
   @override
+  String get homeEmptyState =>
+      'Aegis से बात शुरू करने के लिए\nनीचे का बटन दबाएँ।';
+
+  @override
   String get homeStartTriage => 'ट्रायाज शुरू करें';
 
   @override

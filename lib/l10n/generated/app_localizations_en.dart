@@ -252,6 +252,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeSubtitle => 'Offline. Ready.';
 
   @override
+  String get homeEmptyState =>
+      'Tap the button below to start a\nconversation with Aegis.';
+
+  @override
   String get homeStartTriage => 'Start triage';
 
   @override

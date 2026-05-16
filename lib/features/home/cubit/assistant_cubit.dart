@@ -317,6 +317,19 @@ class AssistantCubit extends Cubit<AssistantState> {
     _lastBriefingAlertId = briefing.alertId;
     final body = briefing.briefing.trim();
     if (body.isEmpty) return;
+    // Tear down any in-flight conversation BEFORE we show the briefing.
+    // Otherwise a background-fired alert that resumes MainActivity finds
+    // the mic still hot (from before the user backgrounded), and any
+    // siren / TTS / ambient noise leaks into the STT stream as a bogus
+    // utterance. fire-and-forget — the briefing emit + TTS path below
+    // doesn't depend on the cancel completing.
+    if (_conversationActive ||
+        state.stage == AssistantStage.listening ||
+        state.stage == AssistantStage.transcribing ||
+        state.stage == AssistantStage.thinking ||
+        state.stage == AssistantStage.speaking) {
+      unawaited(stopConversation());
+    }
     // Stash so the next mic-driven conversation seeds the chat brain
     // with the briefing as context — the user can ask follow-ups
     // ("what should I do?", "where is the nearest shelter?") without

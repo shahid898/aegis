@@ -136,6 +136,7 @@
   "permissionNotificationsBody": "Needed to deliver emergency briefings and beacon alerts.",
 
   "homeSubtitle": "Offline. Ready.",
+  "homeEmptyState": "Tap the button below to start a\nconversation with Aegis.",
   "homeStartTriage": "Start triage",
   "homeReports": "Reports",
   "homeTakePhoto": "Take a photo",

@@ -524,6 +524,12 @@ abstract class AppLocalizations {
   /// **'Offline. Ready.'**
   String get homeSubtitle;
 
+  /// No description provided for @homeEmptyState.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap the button below to start a\nconversation with Aegis.'**
+  String get homeEmptyState;
+
   /// No description provided for @homeStartTriage.
   ///
   /// In en, this message translates to:

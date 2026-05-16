@@ -81,6 +81,7 @@
   "permissionNotificationsBody": "आपातकालीन ब्रीफिंग और बीकन अलर्ट देने के लिए ज़रूरी।",
 
   "homeSubtitle": "ऑफ़लाइन. तैयार.",
+  "homeEmptyState": "Aegis से बात शुरू करने के लिए\nनीचे का बटन दबाएँ।",
   "homeStartTriage": "ट्रायाज शुरू करें",
   "homeReports": "रिपोर्ट",
   "homeTakePhoto": "फ़ोटो लें",

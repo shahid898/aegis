@@ -203,9 +203,9 @@ class _HomeViewState extends State<_HomeView> {
   Widget build(BuildContext context) {
     return Scaffold(
       // Debug-only entry point for the SMS-alert pipeline. Tapping fires
-      // `AlertBridge.simulate(...)` so we can exercise FunctionGemma routing
-      // and the PENDING/CONFIRMED state machine without a real telco. The FAB
-      // is dropped in release builds via `kDebugMode`.
+      // `AlertBridge.simulate(...)` so we can exercise the wake-app
+      // routing pipeline without a real telco. The FAB is dropped in
+      // release builds via `kDebugMode`.
       floatingActionButton: const _AlertSimulatorFab(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: SafeArea(
@@ -473,11 +473,11 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
     final intakeOpen = state.intakeOpen;
 
     if (!hasInflight && !hasHistory && !intakeOpen) {
-      return const Center(
+      return Center(
         child: Text(
-          'Tap the button below to start a\nconversation with Aegis.',
+          AppLocalizations.of(context).homeEmptyState,
           textAlign: TextAlign.center,
-          style: TextStyle(
+          style: const TextStyle(
             color: AegisColors.onSurfaceMuted,
             fontSize: 16,
             height: 1.4,
@@ -627,17 +627,10 @@ class _Bubble extends StatelessWidget {
 
   final String label;
   final String text;
-
-  /// [CrossAxisAlignment.end] = user-side (right-aligned, no top-left
-  /// corner rounding). [CrossAxisAlignment.start] = assistant-side
-  /// (left-aligned, no top-right corner rounding). Anything else
-  /// falls through to centered which we don't actually use.
   final CrossAxisAlignment align;
   final Color background;
   final Uint8List? image;
   final Uint8List? audio;
-
-  bool get _isUser => align == CrossAxisAlignment.end;
 
   @override
   Widget build(BuildContext context) {
@@ -647,97 +640,62 @@ class _Bubble extends StatelessWidget {
     if (!hasText && !hasImage && !hasAudio) {
       return const SizedBox.shrink();
     }
-
-    // Asymmetric bubble tail — user bubbles flatten their bottom-right
-    // corner, assistant bubbles flatten bottom-left. Reads as a clear
-    // chat-style "speech tail" without needing a custom painter.
-    final radius = BorderRadius.only(
-      topLeft: const Radius.circular(18),
-      topRight: const Radius.circular(18),
-      bottomLeft: Radius.circular(_isUser ? 18 : 4),
-      bottomRight: Radius.circular(_isUser ? 4 : 18),
-    );
-
-    // Cap bubble width at ~80% of screen so a long assistant paragraph
-    // doesn't stretch edge-to-edge — that reads as a paragraph block,
-    // not a chat message.
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final maxBubbleWidth = screenWidth * 0.80;
-
-    final bubble = ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: maxBubbleWidth),
-      child: Column(
-        crossAxisAlignment:
-            _isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: AegisColors.onSurfaceMuted,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 0.4,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: radius,
-              border: Border.all(
-                color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (hasImage)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 220),
-                      child: Image.memory(
-                        image!,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                if (hasImage && (hasAudio || hasText))
-                  const SizedBox(height: 8),
-                if (hasAudio)
-                  AegisAudioChip(
-                    key: ValueKey(audio!.length),
-                    wavBytes: audio!,
-                  ),
-                if (hasAudio && hasText) const SizedBox(height: 8),
-                if (hasText)
-                  Text(
-                    text,
-                    textAlign: _isUser ? TextAlign.right : TextAlign.left,
-                    style: const TextStyle(
-                      color: AegisColors.onSurface,
-                      fontSize: 16,
-                      height: 1.35,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-
-    // Row controls horizontal placement of the bubble inside the
-    // parent's full-width slot. User → right, assistant → left.
-    return Row(
-      mainAxisAlignment:
-          _isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: align,
       children: [
-        Flexible(child: bubble),
+        Text(
+          label,
+          style: const TextStyle(
+            color: AegisColors.onSurfaceMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.4,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: AegisColors.onSurfaceMuted.withValues(alpha: 0.15),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (hasImage)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: Image.memory(
+                      image!,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              if (hasImage && (hasAudio || hasText))
+                const SizedBox(height: 8),
+              if (hasAudio)
+                AegisAudioChip(
+                  key: ValueKey(audio!.length),
+                  wavBytes: audio!,
+                ),
+              if (hasAudio && hasText) const SizedBox(height: 8),
+              if (hasText)
+                Text(
+                  text,
+                  style: const TextStyle(
+                    color: AegisColors.onSurface,
+                    fontSize: 16,
+                    height: 1.35,
+                  ),
+                ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1138,9 +1096,8 @@ class _AlertSimulatorSheetState extends State<_AlertSimulatorSheet> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'Injects a synthetic AlertEvent through the native bridge — '
-              'exercises FunctionGemma + the PENDING/CONFIRMED siren state '
-              'machine without a real SMS.',
+              'Injects a synthetic AlertEvent through the native bridge so '
+              'we can exercise the wake-app pipeline without a real SMS.',
               style: TextStyle(
                 color: AegisColors.onSurfaceMuted,
                 fontSize: 13,

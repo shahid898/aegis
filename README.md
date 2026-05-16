@@ -133,9 +133,9 @@ Skills live in `assets/skills/<id>/SKILL.md`; their frontmatter is concatenated 
 
 ---
 
-## Gemma 4 — Implementation Proof
+## Gemma 4 Integration
 
-This section exists so a reviewer can verify in under five minutes that Aegis is genuinely powered by Gemma 4 — not a stub, regex, or generic LLM swap.
+Reference for anyone touching the LLM path: where Gemma 4 lives in the tree, which SDK surface it talks to, and how each capability lands in the app.
 
 ### 1. SDK pin
 
@@ -238,18 +238,18 @@ I/flutter: [Aegis][Cubit] map call resolved hits=30 radius=10.0km
 
 The `[FfiInferenceModelSession/perf]` line is emitted by LiteRT-LM's FFI bridge; `[Aegis][LLM]` and `[Aegis][Cubit]` are our own debug prints around the Gemma 4 call.
 
-### 8. Why Gemma 4 (not another LLM)
+### 8. Why one model handles every role
 
-| Requirement | Gemma 4 fit |
+| Requirement | How Gemma 4 covers it |
 |---|---|
 | On-device, no cloud | Runs in LiteRT-LM at 2-3 t/s on mid-range Android |
-| Multilingual (24+ languages) | Pretraining covers all Aegis target locales |
+| Multilingual (24+ languages) | Pretraining covers Aegis's target locales |
 | Vision (damage photos) | E2B vision head accepts up to 2 520 image patches |
-| Audio (ASR survivor statements) | Native audio modality removes need for a separate Whisper pack |
+| Audio (ASR for survivor statements) | Native audio modality removes the need for a separate Whisper pack |
 | Tool calling (structured reports + map) | Native `<\|tool_call\|>` tokens parsed by the SDK without prompt-engineered JSON |
-| One model, many roles | Drops disk from 4× specialist models to a single 3.4 GB pack |
+| One pack, many roles | Drops disk from four specialist models to a single 3.4 GB pack |
 
-No other open-weights model published as of 2026 covers all six rows in one binary. That is the unambiguous reason Aegis is built on Gemma 4.
+Covering all six in one binary collapses what would otherwise be a chat-model + Whisper + a vision model + a tool-router into a single warm engine.
 
 ---
 

@@ -116,47 +116,41 @@ const Map<String, String> _languageNames = {
 /// protective steps and only THEN reminds them to call for help. The
 /// "call services" line never replaces actionable guidance.
 const String _aegisSystemPromptTemplate = '''
-You are Aegis, an offline emergency assistant. The user is most likely
-injured, in immediate danger, or helping someone who is. Your job is to
-GIVE them concrete steps they can do RIGHT NOW with their own hands —
-not to dispatch them somewhere else.
+You are Aegis, an offline emergency assistant. User is likely injured,
+in danger, or helping someone who is. Give concrete steps they can do
+with their hands NOW.
 
 On every turn:
 
-1. When the emergency is clearly described, ALWAYS respond with
-   concrete, doable steps in a numbered list (3-6 short steps).
-   Bias toward action: stop the bleeding, get to shelter, put out
-   the fire, check breathing, move away from the hazard.
+1. Clear emergency → numbered list, 3-6 short action steps (stop
+   bleeding, get to shelter, check breathing, move from hazard).
 
-2. When the user describes an injury or medical issue, give standard
-   first-aid steps for that specific issue (apply firm pressure to a
-   bleeding wound, elevate the limb, do not move a suspected spine
-   injury, run cool water on a burn, etc.). Be specific and physical.
+2. Injury → standard first-aid for that injury. Specific, physical
+   (firm pressure on bleed, cool water on burn, don't move spine).
 
-3. After the actionable steps, add ONE short line telling them to also
-   call emergency services if they haven't already. Never let "call
-   for help" be the whole answer — that's the worst-case fallback the
-   user already knows.
+3. After steps, ONE line telling them to also call emergency services
+   if not already. Never make "call for help" the whole answer.
 
-4. Use plain language. Short sentences. No medical jargon. Acknowledge
-   the user in one short opening line BEFORE the steps when they sound
-   panicked or hurt.
+4. Plain language. Short sentences. No jargon. One acknowledging line
+   before steps if user sounds panicked or hurt.
 
-5. CLARIFICATION RULE: If the user's message does not describe a
-   specific emergency, injury, or hazard, skip the steps entirely
-   and ask ONE short, direct question to identify what is actually
-   happening. Never guess. Never invent a scenario to fill the
-   response.
+5. CLARIFY: If message is not a specific emergency/injury/hazard,
+   skip steps and ask ONE direct question. Never guess. Never invent
+   a scenario.
 
-6. LANGUAGE RULE: Always reply in the exact same language the user
-   wrote in. Do not switch languages. Do not mix languages.
+6. NEARBY-PLACES RULE: User asks about any nearby facility (hospital,
+   shelter, fuel, pharmacy, water, ATM, police, fire station, food,
+   charging) in any language → call `render_map_view`. Do NOT ask
+   for their location. `spoken_summary` argument is your one-line
+   reply in the user's language.
 
-7. If you genuinely do not know a fact (a phone number, an address, a
-   specific drug dose), say so plainly and suggest the safe default.
-   Never invent facts.
+7. LANGUAGE RULE: Reply in the same language the user wrote in. No
+   switching, no mixing.
 
-8. Aim for 60-140 words. Long enough to be useful, short enough to be
-   readable on a phone in an emergency.
+8. Unknown facts (phone numbers, addresses, drug doses): say so
+   plainly. Never invent.
+
+9. 60-140 words. Long enough to help, short enough for a phone screen.
 ''';
 
 String _buildSystemPrompt(String? languageCode, {String? briefingContext}) {
@@ -383,10 +377,15 @@ const Map<String, Object?> _mapViewToolSchema = <String, Object?>{
 /// Chat-path tool. Gemma 4 calls this when the user asks about nearby
 /// critical facilities; the cubit resolves location + POIs from the
 /// offline DB and pins an inline map card onto the conversation turn.
+///
+/// Description is intentionally short — bundle's `prefill_1024`
+/// ceiling rejects oversized tool declarations after jinja-render.
+/// Multilingual trigger coverage lives in the per-turn nudge
+/// ([_hasNearbyPlacesIntent]) + system prompt's NEARBY-PLACES RULE.
 final Tool _renderMapViewTool = const Tool(
   name: 'render_map_view',
   description:
-      'Render an inline map showing nearby disaster-critical places (shelter, hospital, water, pharmacy, fuel, etc.). Call when the user asks where to go, where to find help, or names a category from the enum below. The app already knows the user\'s location and the offline POI database — never invent place names, addresses, or coordinates.',
+      'Render an inline map of nearby disaster-critical places (shelter, hospital, clinic, pharmacy, water, food, fuel, ATM, police, fire station, charging, connectivity). Call when the user asks where to find or how to reach any such place, in ANY language. App already knows the user\'s GPS — never ask for their location. `spoken_summary` is in the user\'s language.',
   parameters: _mapViewToolSchema,
 );
 
@@ -1600,6 +1599,33 @@ match-mesh-beacon (missing person).
       final mapEvents = <ChatMapCall>[];
       var relayDone = false;
 
+      // Inline-tool-call detection state. Gemma 4 IT sometimes emits
+      // the tool call as plain text (`render_map_view(...)`) instead
+      // of the native `<|tool_call>` channel — observed on non-English
+      // and Hinglish prompts after we trimmed the system prompt to
+      // fit `prefill_1024`.
+      //
+      // Strategy: accumulate ALL output into [headBuffer] until we
+      // can disambiguate. Three transitions:
+      //   1. Buffer matches `render_map_view(` prefix → flip to
+      //      [pythonCallSuppressed] mode, keep accumulating, parse
+      //      when closing `)` arrives.
+      //   2. Buffer grows past [_inlineCallProbeLimit] without
+      //      matching → flush prefix to the chat-text stream and
+      //      forward subsequent tokens directly. The model committed
+      //      to prose; nothing to recover.
+      //   3. Buffer is a strict-prefix of `render_map_view(` → keep
+      //      holding (next token may complete the marker).
+      final headBuffer = StringBuffer();
+      var pythonCallSuppressed = false;
+      var prefixDrained = false;
+
+      void flushHeadAsText() {
+        if (headBuffer.isEmpty) return;
+        textController.add(headBuffer.toString());
+        headBuffer.clear();
+      }
+
       Future<void> relay() async {
         try {
           await for (final response
@@ -1612,11 +1638,69 @@ match-mesh-beacon (missing person).
               // FunctionCallResponse. Without this guard the JSON
               // blob (`{"role":"assistant","tool_calls":[...]}`) ends
               // up in the chat bubble next to the inline map card.
-              // Strip the wrapper deterministically — anything that
-              // starts with the assistant-role envelope and mentions
-              // `tool_calls` is the SDK's transitional emission.
               if (_looksLikeToolCallJson(token)) continue;
-              textController.add(token);
+
+              if (pythonCallSuppressed) {
+                headBuffer.write(token);
+                final parsed =
+                    _tryParseInlinePythonCall(headBuffer.toString());
+                if (parsed != null) {
+                  if (kDebugMode) {
+                    debugPrint(
+                      '[Aegis][LLM] askStream inline-python tool=render_map_view '
+                      'recovered (buffer=${headBuffer.length} chars)',
+                    );
+                  }
+                  mapEvents.add(parsed);
+                  headBuffer.clear();
+                  pythonCallSuppressed = false;
+                  prefixDrained = true;
+                }
+                continue;
+              }
+
+              if (prefixDrained) {
+                textController.add(token);
+                continue;
+              }
+
+              // Pre-disambiguation: keep accumulating without
+              // emitting. We need ~`render_map_view(`.length chars
+              // (16) to decide. Cap [_inlineCallProbeLimit] so a
+              // model that opens with prose doesn't stall the chat
+              // bubble forever.
+              headBuffer.write(token);
+              final head = headBuffer.toString();
+              if (head.contains('render_map_view(')) {
+                // Tool call detected — discard any preamble before
+                // the marker (model occasionally prefixes whitespace
+                // or quotes) and keep only the call itself.
+                final markerIdx = head.indexOf('render_map_view(');
+                headBuffer
+                  ..clear()
+                  ..write(head.substring(markerIdx));
+                pythonCallSuppressed = true;
+                // Try parse immediately in case the whole call
+                // arrived in one chunk.
+                final parsed =
+                    _tryParseInlinePythonCall(headBuffer.toString());
+                if (parsed != null) {
+                  mapEvents.add(parsed);
+                  headBuffer.clear();
+                  pythonCallSuppressed = false;
+                  prefixDrained = true;
+                }
+                continue;
+              }
+
+              // No marker yet. If buffer can no longer be a strict
+              // prefix of `render_map_view(`, give up and flush to
+              // chat stream.
+              if (head.length >= _inlineCallProbeLimit ||
+                  !_isPrefixOfRenderMapView(head)) {
+                flushHeadAsText();
+                prefixDrained = true;
+              }
             } else if (response is FunctionCallResponse) {
               final call = _toMapCall(response);
               if (call != null) mapEvents.add(call);
@@ -1628,6 +1712,11 @@ match-mesh-beacon (missing person).
             }
           }
         } finally {
+          // Flush any straggling buffered prelude. If we were in
+          // suppression mode but never saw the closing `)`, treat
+          // what we held as text — better to leak a broken
+          // `render_map_view(` snippet than to drop the whole turn.
+          if (!pythonCallSuppressed) flushHeadAsText();
           relayDone = true;
           await textController.close();
         }
@@ -1677,10 +1766,144 @@ match-mesh-beacon (missing person).
     dotAll: true,
   );
 
+  /// Max chars to hold before giving up on the inline-tool-call
+  /// detection and forwarding text to the chat bubble. 64 chars is
+  /// enough for any preamble + the 16-char `render_map_view(` marker
+  /// while still being a hard upper bound on first-token latency.
+  static const int _inlineCallProbeLimit = 64;
+  static const String _renderMapMarker = 'render_map_view(';
+
+  /// True when [text] could still grow into the `render_map_view(`
+  /// marker via concatenation. Lets us hold off on flushing the
+  /// buffer to the chat-text stream until we know the model isn't
+  /// about to commit to a tool call.
+  static bool _isPrefixOfRenderMapView(String text) {
+    if (text.length >= _renderMapMarker.length) {
+      return text.contains(_renderMapMarker);
+    }
+    return _renderMapMarker.startsWith(text);
+  }
+
   bool _looksLikeToolCallJson(String token) {
     if (token.length < 32) return false;
     if (!token.contains('tool_calls')) return false;
     return _toolCallJsonProbe.hasMatch(token);
+  }
+
+  /// Fallback parser for the Python-style inline tool call
+  /// `render_map_view(categories=["hospital"], radius_km=5,
+  /// spoken_summary="…")` that Gemma 4 IT emits as plain text when it
+  /// skips the native `<|tool_call>` channel — observed on non-English
+  /// prompts after we trimmed the system prompt to fit `prefill_1024`.
+  ///
+  /// Returns a [ChatMapCall] when the buffer contains a complete,
+  /// balanced call (closing `)` after a balanced argument list).
+  /// Returns null while the call is still streaming so the caller can
+  /// keep accumulating tokens.
+  ChatMapCall? _tryParseInlinePythonCall(String buffer) {
+    final openIdx = buffer.indexOf('render_map_view(');
+    if (openIdx < 0) return null;
+    final argsStart = openIdx + 'render_map_view('.length;
+    // Walk forward respecting quoted strings + bracket nesting to find
+    // the matching closing paren. Anything else inside is opaque.
+    var depth = 1;
+    var i = argsStart;
+    var inString = false;
+    var escape = false;
+    while (i < buffer.length) {
+      final ch = buffer[i];
+      if (escape) {
+        escape = false;
+      } else if (ch == '\\') {
+        escape = true;
+      } else if (ch == '"') {
+        inString = !inString;
+      } else if (!inString) {
+        if (ch == '(' || ch == '[' || ch == '{') {
+          depth++;
+        } else if (ch == ')' || ch == ']' || ch == '}') {
+          depth--;
+          if (depth == 0 && ch == ')') {
+            return _coerceInlineArgs(buffer.substring(argsStart, i));
+          }
+        }
+      }
+      i++;
+    }
+    return null;
+  }
+
+  /// Pull keyword arguments out of a Python-style call body
+  /// (`categories=["hospital"], radius_km=5, spoken_summary="..."`).
+  /// Best-effort — produces empty / partial maps gracefully when
+  /// values are malformed rather than throwing, because tool-call
+  /// recovery on a flaky stream is better than nothing.
+  ChatMapCall? _coerceInlineArgs(String body) {
+    final args = <String, Object?>{};
+    final keyRe =
+        RegExp(r'(\w+)\s*=', multiLine: true);
+    final matches = keyRe.allMatches(body).toList();
+    for (var m = 0; m < matches.length; m++) {
+      final keyMatch = matches[m];
+      final key = keyMatch.group(1);
+      if (key == null) continue;
+      final valueStart = keyMatch.end;
+      final valueEnd =
+          m + 1 < matches.length ? matches[m + 1].start : body.length;
+      final raw = body.substring(valueStart, valueEnd).trim();
+      args[key] = _parseInlineValue(raw);
+    }
+    if (args.isEmpty) return null;
+    return ChatMapCall(MapViewQuery.fromArgs(args));
+  }
+
+  /// Decode a single Python-style value (quoted string, JSON array,
+  /// or bare number). Strips trailing commas. Conservative — anything
+  /// it can't decode comes back as the raw trimmed string.
+  Object? _parseInlineValue(String raw) {
+    var s = raw.trim();
+    if (s.endsWith(',')) s = s.substring(0, s.length - 1).trim();
+    if (s.isEmpty) return null;
+    if (s.startsWith('"') && s.endsWith('"') && s.length >= 2) {
+      return s.substring(1, s.length - 1);
+    }
+    if (s.startsWith('[') && s.endsWith(']')) {
+      // Tiny array decoder: split on commas, unwrap quoted strings.
+      final inner = s.substring(1, s.length - 1);
+      final parts = <String>[];
+      var buf = StringBuffer();
+      var inStr = false;
+      var esc = false;
+      for (final ch in inner.split('')) {
+        if (esc) {
+          buf.write(ch);
+          esc = false;
+        } else if (ch == '\\') {
+          esc = true;
+        } else if (ch == '"') {
+          inStr = !inStr;
+        } else if (ch == ',' && !inStr) {
+          parts.add(buf.toString());
+          buf = StringBuffer();
+        } else {
+          buf.write(ch);
+        }
+      }
+      if (buf.isNotEmpty) parts.add(buf.toString());
+      return parts
+          .map((p) {
+            final t = p.trim();
+            if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) {
+              return t.substring(1, t.length - 1);
+            }
+            return t;
+          })
+          .where((p) => p.isNotEmpty)
+          .toList();
+    }
+    final asNum = num.tryParse(s);
+    if (asNum != null) return asNum;
+    return s;
   }
 
   /// Convert a flutter_gemma `FunctionCallResponse` into a [ChatMapCall]
@@ -1704,17 +1927,93 @@ match-mesh-beacon (missing person).
     final code = scriptCode ?? _preferredLanguage;
     final name = code == null ? null : _languageNames[code];
     final languageLine = name == null
-        ? 'Reply in the same language the user just used (matching script).'
-        : 'Reply in $name only, using the native script for $name.';
-    return '''
-User message:
-$input
+        ? 'Reply in the user\'s script.'
+        : 'Reply in $name (native script).';
 
-Instructions:
-- Answer the user directly. Do not repeat, restate, or quote the user
-  message unless the user explicitly asks you to quote it.
-- $languageLine
+    // Tool-trigger nudge for non-English queries. Gemma 4 IT's
+    // `render_map_view` recall drops on non-English prompts; appending
+    // an explicit hint when the user clearly asks for nearby places
+    // pushes recall back up without spending the prompt budget on
+    // every turn.
+    final nearbyHint = _hasNearbyPlacesIntent(input)
+        ? '\n- Nearby-places query → call `render_map_view`. No location prompt.'
+        : '';
+
+    return '''User: $input
+- Direct answer, no quoting the user.
+- $languageLine$nearbyHint
 ''';
+  }
+
+  /// Heuristic: does the user's message read like a "find nearby X"
+  /// query? Lowercased substring match against multilingual keywords
+  /// for the categories `render_map_view` covers. Catches the most
+  /// common phrasings without a full NLU pass — false positives only
+  /// result in an extra hint to the model, which is harmless. False
+  /// negatives are silent; the system prompt's NEARBY-PLACES RULE
+  /// still fires the tool in those cases.
+  ///
+  /// Coverage spans Aegis's 12 priority locales (en, hi, bn, ta, te,
+  /// mr, gu, pa, ur, es, ar, zh). Other languages fall back entirely
+  /// on the system prompt rule + tool description.
+  static const List<String> _nearbyIntentTokens = <String>[
+    // -- English --
+    'nearby', 'nearest', 'closest', 'find', 'show', 'where',
+    'hospital', 'clinic', 'pharmacy', 'shelter', 'fuel', 'gas station',
+    'fuel station', 'water', 'food', 'atm', 'police', 'fire station',
+    'charging', 'wifi',
+    // -- Hindi (हिन्दी) --
+    // Cover both nuktaless (नजदीक) and nukta (नज़दीक) variants since
+    // users type both. Same for हॉस्पिटल vs अस्पताल (Latin-loan vs
+    // pure-Hindi).
+    'नज़दीक', 'नज़दीकी', 'नजदीक', 'नजदीकी', 'पास', 'कहाँ', 'किधर',
+    'ढूँढो', 'ढूंढो', 'ढूँढ', 'ढूंढ', 'खोजो', 'खोज',
+    'अस्पताल', 'हॉस्पिटल', 'हास्पिटल', 'क्लिनिक', 'दवाई', 'फार्मेसी',
+    'आश्रय', 'शेल्टर', 'पानी', 'जल', 'पुलिस', 'एटीएम',
+    'ईंधन', 'फ्यूल', 'पेट्रोल', 'खाना', 'भोजन',
+    // -- Bengali (বাংলা) --
+    'কাছাকাছি', 'কাছে', 'নিকটতম', 'কোথায়', 'খুঁজে',
+    'হাসপাতাল', 'ক্লিনিক', 'ওষুধ', 'আশ্রয়', 'পানি', 'জল',
+    'পুলিশ', 'এটিএম', 'জ্বালানি', 'খাবার',
+    // -- Tamil (தமிழ்) --
+    'அருகில்', 'நெருங்கிய', 'எங்கே', 'கண்டுபிடி',
+    'மருத்துவமனை', 'மருந்தகம்', 'தங்குமிடம்', 'தண்ணீர்',
+    'காவல்', 'எரிபொருள்', 'உணவு',
+    // -- Telugu (తెలుగు) --
+    'దగ్గర', 'సమీప', 'ఎక్కడ', 'కనుగొనండి',
+    'ఆసుపత్రి', 'క్లినిక్', 'ఔషధశాల', 'ఆశ్రయం', 'నీరు',
+    'పోలీసు', 'ఇంధనం', 'ఆహారం',
+    // -- Marathi (मराठी) --
+    'जवळ', 'जवळचा', 'जवळचे', 'कुठे', 'शोधा',
+    'रुग्णालय', 'दवाखाना', 'आश्रय', 'पाणी', 'पोलीस', 'इंधन', 'अन्न',
+    // -- Gujarati (ગુજરાતી) --
+    'નજીક', 'નજીકના', 'ક્યાં', 'શોધો',
+    'હોસ્પિટલ', 'દવાખાનું', 'આશ્રય', 'પાણી', 'પોલીસ', 'ઈંધણ',
+    // -- Punjabi (ਪੰਜਾਬੀ) --
+    'ਨੇੜੇ', 'ਨੇੜਲਾ', 'ਕਿੱਥੇ', 'ਲੱਭੋ',
+    'ਹਸਪਤਾਲ', 'ਕਲੀਨਿਕ', 'ਆਸਰਾ', 'ਪਾਣੀ', 'ਪੁਲਿਸ', 'ਬਾਲਣ',
+    // -- Urdu (اردو) --
+    'قریب', 'قریبی', 'کہاں', 'تلاش',
+    'ہسپتال', 'کلینک', 'پناہ', 'پانی', 'پولیس', 'ایندھن', 'کھانا',
+    // -- Spanish (Español) --
+    'cerca', 'cercano', 'cercana', 'más cercano', 'dónde', 'donde',
+    'buscar', 'encontrar', 'hospital', 'clínica', 'farmacia', 'refugio',
+    'agua', 'policía', 'gasolinera', 'combustible', 'comida',
+    // -- Arabic (العربية) --
+    'قريب', 'الأقرب', 'أين', 'ابحث', 'مستشفى', 'عيادة', 'صيدلية',
+    'ملجأ', 'ماء', 'شرطة', 'وقود', 'طعام',
+    // -- Chinese (中文) --
+    '附近', '最近', '哪里', '哪裡', '找',
+    '医院', '醫院', '诊所', '診所', '药房', '藥房', '避难所', '避難所',
+    '水', '警察', '加油站', '食物',
+  ];
+
+  bool _hasNearbyPlacesIntent(String text) {
+    final lower = text.toLowerCase();
+    for (final tok in _nearbyIntentTokens) {
+      if (lower.contains(tok.toLowerCase())) return true;
+    }
+    return false;
   }
 
   String? _detectLanguageFromScript(String text) {

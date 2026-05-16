@@ -195,6 +195,79 @@ class SttService {
     }
   }
 
+  /// Capture raw mic audio into a WAV blob WITHOUT VAD endpointing.
+  /// Used for triage audio evidence where the user wants to record up
+  /// to [maxDuration] (default 30s, Gemma 4 audio ceiling) of free-form
+  /// content — descriptions of a scene, ambient sounds, etc. — and
+  /// have the model interpret the whole clip, not just speech
+  /// segments.
+  ///
+  /// Stops when:
+  ///   - [maxDuration] elapses → returns accumulated WAV (capped),
+  ///   - the source `audio` stream completes (caller cancelled mic),
+  ///   - the stream errors,
+  ///   - [cancelOn] future completes — lets the caller (typically the
+  ///     cubit) trip an early stop when the user re-taps the mic.
+  ///
+  /// Returns null only when no samples were captured at all.
+  Future<Uint8List?> recordRawToWav(
+    Stream<Float32List> audio, {
+    int sampleRate = 16000,
+    Duration maxDuration = const Duration(seconds: 30),
+    Future<void>? cancelOn,
+  }) async {
+    final completer = Completer<Uint8List?>();
+    final accumulated = <double>[];
+    final maxSamples = sampleRate * maxDuration.inSeconds;
+    Timer? cap;
+
+    void emitFinal() {
+      cap?.cancel();
+      if (completer.isCompleted) return;
+      if (accumulated.isEmpty) {
+        completer.complete(null);
+        return;
+      }
+      // Cap to maxDuration in case we overshot on the last frame.
+      final samples = Float32List.fromList(
+        accumulated.length > maxSamples
+            ? accumulated.sublist(0, maxSamples)
+            : accumulated,
+      );
+      accumulated.clear();
+      completer.complete(_encodeWav(samples, sampleRate: sampleRate));
+    }
+
+    cap = Timer(maxDuration, emitFinal);
+
+    final sub = audio.listen(
+      (samples) {
+        if (samples.isEmpty || completer.isCompleted) return;
+        accumulated.addAll(samples);
+        if (accumulated.length >= maxSamples) emitFinal();
+      },
+      onError: (Object e, StackTrace st) {
+        if (!completer.isCompleted) completer.completeError(e, st);
+      },
+      onDone: emitFinal,
+      cancelOnError: true,
+    );
+
+    final cancelSub = cancelOn?.then((_) {
+      if (!completer.isCompleted) emitFinal();
+    }).catchError((_) {});
+
+    try {
+      return await completer.future;
+    } finally {
+      cap.cancel();
+      await sub.cancel();
+      // Awaiting cancelSub keeps the analyzer happy without blocking
+      // — it's already resolved by the time we get here in practice.
+      await cancelSub;
+    }
+  }
+
   /// Release native resources. Safe to call multiple times.
   Future<void> dispose() async {
     _disposeVad();

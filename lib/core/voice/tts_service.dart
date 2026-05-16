@@ -158,7 +158,7 @@ class TtsService {
     if (_engines.isEmpty || _defaultPack == null) {
       throw StateError('TtsService.enqueue called before load() succeeded');
     }
-    final trimmed = text.trim();
+    final trimmed = _sanitizeForSpeech(text).trim();
     if (trimmed.isEmpty) return Future.value();
 
     _stopRequested = false;
@@ -178,6 +178,68 @@ class TtsService {
   Future<void> get whenIdle async {
     final worker = _worker;
     if (worker != null) await worker;
+  }
+
+  /// Strip markdown / formatting characters that the TTS engine would
+  /// otherwise read out literally. Gemma 4 emits the assistant reply
+  /// with `**bold**` emphasis, backticks for code, and numbered-list
+  /// markers — the visual chat bubble keeps them, but the spoken
+  /// stream must not pronounce "asterisk asterisk bold asterisk
+  /// asterisk". This is intentionally conservative: only strips
+  /// well-known markdown decorations, leaves digits and punctuation
+  /// alone so list ordinals still read naturally.
+  static final RegExp _mdEmphasis = RegExp(r'\*{1,3}([^*]+)\*{1,3}');
+  static final RegExp _mdCodeFence = RegExp(r'```[\s\S]*?```');
+  static final RegExp _mdInlineCode = RegExp(r'`([^`]+)`');
+  static final RegExp _mdHeading = RegExp(r'^\s{0,3}#{1,6}\s*', multiLine: true);
+  static final RegExp _mdHr = RegExp(r'^\s*[-*_]{3,}\s*$', multiLine: true);
+  // List bullets at start of line ("- ", "* ", "+ ") get dropped.
+  // Numbered-list ordinals ("1. ", "2. ") also get stripped — sherpa
+  // TTS engines read them aloud as "one period two period" or trail
+  // them awkwardly. Sentence-level pauses + the natural ordering of
+  // the steps carry the structure without spoken numbers.
+  static final RegExp _mdBullet = RegExp(r'^\s*[-*+]\s+', multiLine: true);
+  // Numbered-list ordinals at start of line or string. Handles:
+  //   "1. Apply pressure"   → "Apply pressure"
+  //   "1.Apply pressure"    → "Apply pressure"   (no space after `.`)
+  //   "1."  (chunk that ends right after the period)  → ""
+  //   "1)" / "1)Apply"      → "Apply"
+  // Lookahead `(?=\s|$|[^\d])` prevents eating decimals like
+  // "5.4 megabytes" — period followed by another digit is a decimal,
+  // not an ordinal marker.
+  static final RegExp _mdOrdinal = RegExp(
+    r'^\s*\d{1,3}[.)](?=\s|$|[^\d])\s*',
+    multiLine: true,
+  );
+  // Standalone trailing ordinal label that survived the line-start
+  // strip — e.g. when the previous TTS chunk ended at `Apply pressure.`
+  // and the new chunk starts with `2.` followed by no whitespace
+  // because the next sentence boundary cut early. Catch any orphan
+  // ordinal that appears alone before a newline or at end-of-string.
+  static final RegExp _mdOrdinalOrphan = RegExp(
+    r'(^|\s)\d{1,3}[.)](?=\s|$)',
+    multiLine: true,
+  );
+  static final RegExp _excessiveBlankLines = RegExp(r'\n{3,}');
+
+  static String _sanitizeForSpeech(String input) {
+    var s = input;
+    s = s.replaceAll(_mdCodeFence, ' ');
+    s = s.replaceAllMapped(_mdInlineCode, (m) => m.group(1) ?? '');
+    s = s.replaceAllMapped(_mdEmphasis, (m) => m.group(1) ?? '');
+    s = s.replaceAll(_mdHeading, '');
+    s = s.replaceAll(_mdHr, '');
+    s = s.replaceAll(_mdBullet, '');
+    s = s.replaceAll(_mdOrdinal, '');
+    // Orphan ordinal sweep handles chunks where the sentence boundary
+    // cut left a trailing `1.` / `2.` floating alone. Replacement
+    // preserves the leading whitespace/start-of-line capture group.
+    s = s.replaceAllMapped(
+      _mdOrdinalOrphan,
+      (m) => m.group(1) ?? '',
+    );
+    s = s.replaceAll(_excessiveBlankLines, '\n\n');
+    return s;
   }
 
   /// Stop playback immediately and discard any pending clips.

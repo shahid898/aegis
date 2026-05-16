@@ -457,12 +457,26 @@ class AssistantCubit extends Cubit<AssistantState> {
   }
 
   Future<void> toggleConversation() async {
+    // Intake voice capture is its own flow (no full conversation
+    // session). If the user taps the mic while it's running, treat
+    // the tap as "stop now and submit what we've captured" instead of
+    // toggling the chat session.
+    if (_intakeAudioActive) {
+      _intakeAudioCancel?.complete();
+      return;
+    }
     if (_conversationActive) {
       await stopConversation();
     } else {
       await startConversation();
     }
   }
+
+  /// Set to true while [_captureIntakeAudio] is sitting on the
+  /// recorder. Used by [toggleConversation] so the mic button can
+  /// double as an early-stop trigger for triage audio evidence.
+  bool _intakeAudioActive = false;
+  Completer<void>? _intakeAudioCancel;
 
   Future<void> startConversation() async {
     if (!_voiceReady) return;
@@ -716,6 +730,11 @@ class AssistantCubit extends Cubit<AssistantState> {
     ));
 
     final completer = Completer<String?>();
+    // Track the last partial transcript so a 30s auto-stop can return
+    // whatever the user said even if VAD never fired its silence-end
+    // endpoint (continuous speech, background noise dropping the
+    // silence threshold, etc.).
+    var latestPartial = '';
     _sttSub = _stt
         .transcribeStream(audioStream, language: _languageCode)
         .listen(
@@ -723,8 +742,10 @@ class AssistantCubit extends Cubit<AssistantState> {
         if (!_conversationActive) return;
         switch (update) {
           case SttPartial(:final text):
+            latestPartial = text;
             emit(state.copyWith(transcript: text));
           case SttFinal(:final text):
+            latestPartial = text;
             emit(state.copyWith(
               stage: AssistantStage.transcribing,
               transcript: text,
@@ -736,10 +757,23 @@ class AssistantCubit extends Cubit<AssistantState> {
         if (!completer.isCompleted) completer.completeError(e, st);
       },
       onDone: () {
-        if (!completer.isCompleted) completer.complete('');
+        if (!completer.isCompleted) completer.complete(latestPartial);
       },
       cancelOnError: true,
     );
+
+    // 30s hard cap on a single listening turn. Without this the mic
+    // stays open indefinitely on devices where Silero VAD never
+    // commits to an endpoint (ambient hum, continuous speech). Past
+    // 30s any captured speech is committed as the final transcript.
+    final maxListenTimer = Timer(const Duration(seconds: 30), () {
+      if (completer.isCompleted) return;
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] 30s listen cap fired '
+            'partial="${latestPartial.length} chars"');
+      }
+      completer.complete(latestPartial);
+    });
 
     String? captured;
     try {
@@ -750,6 +784,8 @@ class AssistantCubit extends Cubit<AssistantState> {
         errorMessage: e.toString(),
       ));
       captured = null;
+    } finally {
+      maxListenTimer.cancel();
     }
 
     await _sttSub?.cancel();
@@ -1217,20 +1253,28 @@ class AssistantCubit extends Cubit<AssistantState> {
     emit(state.copyWith(stage: AssistantStage.listening));
 
     Uint8List? wav;
+    // Raw-audio capture: no VAD, no endpointing. Triage evidence is
+    // often non-speech (ambient sounds, partial sentences, multilingual
+    // mixed) that the VAD's silence detector would chop. Capture
+    // straight to WAV up to 30s OR until the user taps the mic to
+    // stop early ([_intakeAudioCancel] completes from
+    // [toggleConversation]).
+    _intakeAudioCancel = Completer<void>();
+    _intakeAudioActive = true;
     try {
-      wav = await _stt
-          .recordToWav(audioStream)
-          .timeout(const Duration(seconds: 30));
-    } on TimeoutException {
-      if (kDebugMode) {
-        debugPrint('[Aegis][Cubit] intake voice capture timed out');
-      }
+      wav = await _stt.recordRawToWav(
+        audioStream,
+        maxDuration: const Duration(seconds: 30),
+        cancelOn: _intakeAudioCancel!.future,
+      );
     } on Object catch (e, st) {
       if (kDebugMode) {
         debugPrint('[Aegis][Cubit] intake voice capture failed: $e');
         debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] intake stack');
       }
     } finally {
+      _intakeAudioActive = false;
+      _intakeAudioCancel = null;
       try {
         await _recorder.cancel();
       } on Object {
@@ -1239,7 +1283,24 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
 
     if (wav == null || wav.isEmpty) {
-      _intakeStubRequested.add('Did not catch any speech. Try again.');
+      _intakeStubRequested.add('Did not catch any audio. Try again.');
+      emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
+      return;
+    }
+
+    // Reject obviously-silent captures so the LLM doesn't fabricate a
+    // triage report out of nothing. RMS below the threshold means the
+    // mic only heard background noise.
+    if (!_isAudioLoudEnough(wav)) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] intake audio rejected — too quiet '
+          '(bytes=${wav.length})',
+        );
+      }
+      _intakeStubRequested.add(
+        'The recording was too quiet. Speak closer to the mic and try again.',
+      );
       emit(state.copyWith(stage: AssistantStage.awaitingConfirmation));
       return;
     }
@@ -1401,6 +1462,32 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
     }
     return [...preferred, ...rest];
+  }
+
+  /// RMS-loudness gate for triage audio evidence. Decodes the mono
+  /// 16-kHz IEEE-float32 PCM payload from [_encodeWav] (44-byte
+  /// header + raw samples) and returns true when the mean amplitude
+  /// is loud enough that the recording is worth sending to the LLM.
+  /// Threshold tuned to reject pure silence + room hum without
+  /// catching whispered speech.
+  static const double _silenceRmsThreshold = 0.008;
+  static const int _minWavBytes = 44 + 16000 * 4 ~/ 2; // ~0.5s audio
+  bool _isAudioLoudEnough(Uint8List wav) {
+    if (wav.length <= _minWavBytes) return false;
+    // Skip the 44-byte WAV header and treat the remainder as
+    // little-endian float32 samples.
+    final byteData = ByteData.sublistView(wav, 44);
+    final sampleCount = byteData.lengthInBytes ~/ 4;
+    if (sampleCount == 0) return false;
+    var sumSquares = 0.0;
+    for (var i = 0; i < sampleCount; i++) {
+      final sample = byteData.getFloat32(i * 4, Endian.little);
+      sumSquares += sample * sample;
+    }
+    final rms = (sumSquares / sampleCount);
+    // Compare squared RMS to avoid an extra sqrt — same monotonic
+    // ordering, faster on long clips.
+    return rms >= _silenceRmsThreshold * _silenceRmsThreshold;
   }
 
   int _lastSentenceBoundary(String text) {

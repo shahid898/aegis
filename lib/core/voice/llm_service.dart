@@ -1487,12 +1487,19 @@ You are Aegis offline triage. $speakRule
 Call `render_triage_report` ONCE per turn. No prose. No extra tool calls.
 
 Decision rules:
-1. OBSERVE — count visible: structures, hazards, responders, weather,
-   light, debris.
-2. INFER — when implied but not directly visible, hedge:
-   "approximately", "likely", "~5 estimated", "based on collapse
-   footprint". Use ranges ("3-5"), not bare zeros.
-3. REPORT — "0 reported" only when scene truly shows zero.
+1. OBSERVE — only count people, vehicles, structures, hazards you
+   can actually SEE in the image or HEAR named in the audio/text.
+2. CASUALTY DEFAULT: "0 reported" unless visible bodies / visible
+   injured persons / explicit user statement ("3 trapped",
+   "two hurt"). Do NOT estimate casualty counts from collapse
+   footprint, damaged-roof area, or vehicle damage. Empty / unclear
+   scene = "0 reported", NOT "~2 estimated".
+3. STRUCTURE INFERENCE allowed: damage scale / HAZUS category /
+   construction type can be inferred from visible damage with a
+   hedge. People counts cannot.
+4. If evidence is too thin to score (empty audio, blurry image,
+   no user text), emit severity=INFO + summary="Insufficient
+   evidence" and zero counts. Do not invent.
 
 Never write GPS, lat/lng, timestamps — app injects them. Never emit
 [INFERRED] / [UNKNOWN] / bracketed placeholders. Write a real value
@@ -2027,10 +2034,42 @@ match-mesh-beacon (missing person).
     if (counts.isEmpty) return null;
     final dominant =
         counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+    if (dominant == 'latin') {
+      // Latin script is ambiguous (en, es, pt, fr, de, vi, sw, ...).
+      // When the persisted locale uses a non-Latin script (hi/bn/ta/
+      // etc.), the user typing Latin means they switched to English
+      // for this turn — return `en` so the reply doesn't come back
+      // in Devanagari. When persisted locale is already Latin-native
+      // (en, es, pt, fr, de, it, etc.), respect it.
+      final pref = _preferredLanguage;
+      if (pref == null || _latinNativeLocales.contains(pref)) {
+        return pref;
+      }
+      return 'en';
+    }
     return _scriptToLanguageHint[dominant];
   }
 
+  /// Locales whose dominant script is Latin. Used by
+  /// [_detectLanguageFromScript] to decide whether Latin-script input
+  /// implies an English switch or just normal typing in the user's
+  /// preferred Latin-script locale.
+  static const Set<String> _latinNativeLocales = <String>{
+    'en', 'es', 'pt', 'fr', 'de', 'it', 'nl', 'sv', 'no', 'da', 'fi',
+    'pl', 'cs', 'sk', 'hu', 'ro', 'tr', 'vi', 'id', 'ms', 'tl', 'sw',
+    'ha', 'yo', 'af', 'sq', 'hr', 'sl', 'lt', 'lv', 'et', 'is', 'ga',
+    'cy', 'eu', 'ca', 'gl', 'mt', 'lb',
+  };
+
   static String? _scriptForRune(int rune) {
+    // Basic Latin (A-Z, a-z) and Latin-1 Supplement letters. Excludes
+    // ASCII whitespace, punctuation, digits — those don't tell us
+    // anything about the message language.
+    if ((rune >= 0x41 && rune <= 0x5A) ||
+        (rune >= 0x61 && rune <= 0x7A) ||
+        (rune >= 0x00C0 && rune <= 0x00FF)) {
+      return 'latin';
+    }
     if (rune >= 0x0900 && rune <= 0x097F) return 'devanagari';
     if (rune >= 0x0980 && rune <= 0x09FF) return 'bengali';
     if (rune >= 0x0A00 && rune <= 0x0A7F) return 'gurmukhi';

@@ -133,6 +133,126 @@ Skills live in `assets/skills/<id>/SKILL.md`; their frontmatter is concatenated 
 
 ---
 
+## Gemma 4 — Implementation Proof
+
+This section exists so a reviewer can verify in under five minutes that Aegis is genuinely powered by Gemma 4 — not a stub, regex, or generic LLM swap.
+
+### 1. SDK pin
+
+`pubspec.yaml` (line 84):
+
+```yaml
+flutter_gemma: ^0.15.0  # native ModelType.gemma4 + <tool_call> parser
+```
+
+`flutter_gemma 0.15.0` is the first release that exposes `ModelType.gemma4` and wires LiteRT-LM's native function-calling tokens through to Dart. Earlier versions cannot represent Aegis's tool surface.
+
+### 2. Model weights
+
+`lib/core/voice/model_catalog.dart:256`:
+
+```dart
+url: 'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/'
+     'resolve/7fa1d78473894f7e736a21d920c3aa80f950c0db/'
+     'gemma-4-E2B-it.litertlm',
+```
+
+The download is content-addressed: SHA-256 is verified after extraction (`ModelPackRepository.install`). The weights are the official Google LiteRT-LM-quantised Gemma 4 E2B Instruction-Tuned model published on Hugging Face by `litert-community`.
+
+### 3. Native `ModelType.gemma4` invocation
+
+`lib/core/voice/llm_service.dart:950` — triage chat session:
+
+```dart
+final chat = await model.createChat(
+  temperature: 0.3, topK: 40, topP: 0.9,
+  supportImage: hasImage,
+  supportAudio: input.hasAudio,
+  supportsFunctionCalls: true,
+  tools: <Tool>[_renderTriageReportTool],
+  toolChoice: ToolChoice.required,
+  modelType: ModelType.gemma4,      // ← native Gemma 4 chat template
+  isThinking: false,
+  systemInstruction: systemPrompt,
+);
+```
+
+The matching ask-mode session lives in `_ensureChat` (around line 1655) and uses `tools: [_renderMapViewTool]` with `ToolChoice.auto`.
+
+### 4. Tool declarations (JSON Schema)
+
+Two `Tool` objects exposed to the model — `lib/core/voice/llm_service.dart:317` and `:375`:
+
+```dart
+final Tool _renderTriageReportTool = const Tool(
+  name: 'render_triage_report',
+  description: 'Render a structured incident report card …',
+  parameters: _triageToolSchema,    // ICS-209 / OCHA SITREP / HAZUS schema
+);
+
+final Tool _renderMapViewTool = const Tool(
+  name: 'render_map_view',
+  description: 'Render an inline map showing nearby disaster-critical places …',
+  parameters: _mapViewToolSchema,   // categories[], radius_km, spoken_summary
+);
+```
+
+Schemas are real JSON-Schema dictionaries (`_triageToolSchema`, `_mapViewToolSchema`) with `enum`, `minItems`, `maxLength`, etc. — see lines 165-308 and 320-368.
+
+### 5. Tool-call parsing (`FunctionCallResponse`)
+
+`lib/core/voice/llm_service.dart::_parseToolResponse` consumes the SDK's parsed envelope, not regex:
+
+```dart
+final List<FunctionCallResponse> calls = switch (response) {
+  FunctionCallResponse() => <FunctionCallResponse>[response],
+  ParallelFunctionCallResponse(:final calls) => calls,
+  _ => const <FunctionCallResponse>[],
+};
+```
+
+The streaming chat path (`_askStreamOnce`) does the same: it relays `TextResponse` tokens onto the TTS pipeline and converts `FunctionCallResponse` into a `ChatMapCall` event that the cubit handles.
+
+### 6. Capability → file:line index
+
+| Gemma 4 capability | Aegis code | File:line |
+|---|---|---|
+| Chat (multilingual, streaming) | `LlmService.askStream` | `lib/core/voice/llm_service.dart:764` |
+| Audio (ASR) | `LlmService.transcribeAudio` | `lib/core/voice/llm_service.dart:543` |
+| Vision (image input on triage) | `Message(imageBytes: …)` | `lib/core/voice/llm_service.dart` (in `_generateReportOnce`) |
+| Native function calling | `Tool` + `FunctionCallResponse` | `lib/core/voice/llm_service.dart:317, 375, _parseToolResponse` |
+| Alert classification | `FunctionRouter.route` | `lib/core/llm/function_router.dart` |
+| Skill catalog injection | `SkillsRegistry.buildCatalogPrompt` | `lib/core/skills/skills_registry.dart` |
+
+### 7. Runtime evidence
+
+Sample log from a real device run (anonymised):
+
+```
+I/flutter: [FfiInferenceModelSession/perf] (async) time-to-first-chunk (prefill): 13262ms
+I/flutter: InferenceChat: 1 SDK-parsed tool call(s) at end of stream
+I/flutter: [Aegis][LLM] askStream tool=render_map_view argKeys=[categories, radius_km, spoken_summary]
+I/flutter: [Aegis][Cubit] ChatMapCall MapViewQuery(categories: hospital, radiusKm: 10.0, spoken: 29c)
+I/flutter: [Aegis][Cubit] map call resolved hits=30 radius=10.0km
+```
+
+The `[FfiInferenceModelSession/perf]` line is emitted by LiteRT-LM's FFI bridge; `[Aegis][LLM]` and `[Aegis][Cubit]` are our own debug prints around the Gemma 4 call.
+
+### 8. Why Gemma 4 (not another LLM)
+
+| Requirement | Gemma 4 fit |
+|---|---|
+| On-device, no cloud | Runs in LiteRT-LM at 2-3 t/s on mid-range Android |
+| Multilingual (24+ languages) | Pretraining covers all Aegis target locales |
+| Vision (damage photos) | E2B vision head accepts up to 2 520 image patches |
+| Audio (ASR survivor statements) | Native audio modality removes need for a separate Whisper pack |
+| Tool calling (structured reports + map) | Native `<\|tool_call\|>` tokens parsed by the SDK without prompt-engineered JSON |
+| One model, many roles | Drops disk from 4× specialist models to a single 3.4 GB pack |
+
+No other open-weights model published as of 2026 covers all six rows in one binary. That is the unambiguous reason Aegis is built on Gemma 4.
+
+---
+
 ## Offline footprint after onboarding
 
 | Asset | Size | Notes |

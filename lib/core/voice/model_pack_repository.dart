@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
 
 import 'model_pack.dart';
 import 'model_registry.dart';
@@ -76,7 +77,20 @@ const String _hfTokenFromEnv = "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";
 /// foreground service, iOS URLSession background queue). Also picks up
 /// after flaky-network drops via HTTP Range when the origin supports it.
 class ModelPackRepository {
-  ModelPackRepository(this._registry) : _downloader = FileDownloader();
+  ModelPackRepository(this._registry) : _downloader = FileDownloader() {
+    // Bump per-request read timeout. Default ~60s is too tight for a
+    // multi-GB transfer over a throttled CDN — one stalled TCP window
+    // cascades into a `Task <id> timed out` (visible in adb logs) and
+    // the whole task fails. 5 min lets the plugin coast through brief
+    // throttle dips before tripping a Range-resume retry. Connection
+    // timeout stays at the default since "can't reach server" should
+    // fail fast.
+    unawaited(_downloader.configure(
+      globalConfig: [
+        (Config.requestTimeout, const Duration(minutes: 5)),
+      ],
+    ));
+  }
 
   final ModelRegistry _registry;
   final FileDownloader _downloader;
@@ -103,20 +117,61 @@ class ModelPackRepository {
     final stagingFilename = stagingFile.uri.pathSegments.last;
     final headers = _authHeadersFor(pack);
 
-    // Parallel chunked download: 4 concurrent HTTP Range requests
-    // against the same origin. HuggingFace's resolve URL redirects to
-    // S3 which honors Range — typical wall-clock gain is 2-4× over a
-    // single-stream Dio download. Trade-off: ParallelDownloadTask
-    // cannot pause/resume on failure (the chunk plan is in-memory only
-    // and cancellation cascades to every chunk). Retries still work —
-    // the whole task retries from scratch up to `retries` times — so
-    // transient drops auto-recover, just from byte 0 of the failed
-    // chunk's range, not the file. Cancel still works the same way.
-    final task = ParallelDownloadTask(
+    // HuggingFace gated-repo URLs redirect to `cdn-lfs.huggingface.co`
+    // with a signed query string. Many HTTP clients (including the
+    // one inside background_downloader on some Android API levels)
+    // strip the `Authorization` header on cross-origin redirect as a
+    // token-leak safeguard. When that happens, the GET against
+    // cdn-lfs falls back to the anonymous throttle bucket (~0.5 MB/s
+    // observed) instead of the authenticated bucket. Workaround:
+    // resolve the redirect ourselves with the Authorization header
+    // applied, capture the signed cdn-lfs URL (the signature itself
+    // is the auth — no header needed), and hand THAT to the
+    // background downloader. Plain GET, full bandwidth.
+    final resolvedUrl = await _resolveDownloadUrl(pack.archiveUrl, headers);
+    // The redirected URL is self-authenticating via its signed query
+    // string. Passing the Authorization header to cdn-lfs would
+    // either be ignored or rejected, so strip it.
+    final taskHeaders = identical(resolvedUrl, pack.archiveUrl)
+        ? (headers ?? const <String, String>{})
+        : const <String, String>{};
+
+    // Migration: prior builds used ParallelDownloadTask which writes a
+    // chunk-merge stub into the same staging path. Single-stream
+    // DownloadTask resumes via HTTP Range against whatever bytes
+    // already exist there, so a leftover parallel-scheme partial will
+    // either fail SHA verification at the end (best case) or be
+    // appended onto with mismatched bytes (worst case). Cheapest fix:
+    // wipe any pre-existing staging file before kicking off the new
+    // task. Next session's partial will be a proper single-stream
+    // resume.
+    if (await stagingFile.exists()) {
+      try {
+        await stagingFile.delete();
+      } on FileSystemException {
+        // Best-effort; if delete fails, the download will overwrite.
+      }
+    }
+
+    // Single-stream DownloadTask. We previously used
+    // ParallelDownloadTask with chunks=4 for the theoretical 2-4×
+    // speedup, but in practice:
+    //   1. HuggingFace's CDN throttles per-IP parallel Range requests,
+    //      so the 4 chunks compete for the same throttled pipe and end
+    //      up no faster (sometimes slower) than one stream.
+    //   2. Parallel chunks have no per-chunk resume — when any single
+    //      chunk times out (logs: `Task <id> timed out`), the whole
+    //      ParallelDownloadTask fails and retries restart from byte 0
+    //      of every chunk. On a multi-GB file at ~10 Mbps this means
+    //      losing 30 min of progress per transient drop.
+    // Plain DownloadTask uses HTTP `Range` to resume from the last
+    // received byte on retry / app relaunch, so flaky networks
+    // amortise rather than punish. `allowPause: true` exposes the
+    // pause/resume API the cubit calls.
+    final task = DownloadTask(
       taskId: 'aegis-pack-${pack.id}',
-      url: pack.archiveUrl,
+      url: resolvedUrl,
       filename: stagingFilename,
-      chunks: 4,
       // Absolute path. We resolve `${registryRoot}/.staging/` via
       // baseDirectory.root and a literal directory string so the
       // plugin can find the same staging file across launches without
@@ -124,8 +179,9 @@ class ModelPackRepository {
       // and warm starts on some Android skins).
       baseDirectory: BaseDirectory.root,
       directory: stagingDir,
-      headers: headers ?? const <String, String>{},
+      headers: taskHeaders,
       retries: 5,
+      allowPause: true,
       updates: Updates.statusAndProgress,
       // Surface to the OS so a backgrounded download keeps a system
       // notification visible (Android requires this for long-running
@@ -248,12 +304,10 @@ class ModelPackRepository {
     return _downloader.cancelTaskWithId(taskId);
   }
 
-  // NB: pause/resume removed. We use [ParallelDownloadTask] for the
-  // 2-4× speed-up, and the plugin doesn't support pause on parallel
-  // downloads (the chunk plan is in-memory only). Cancel + retry are
-  // the only flow-control levers. If pause/resume becomes a hard
-  // product requirement later, switch back to plain [DownloadTask]
-  // with `allowPause: true` and eat the single-stream throughput.
+  // Pause/resume aren't surfaced through the cubit today — cancel +
+  // restart are the only flow-control levers. DownloadTask supports
+  // pause natively (the task is created with `allowPause: true`), so
+  // wiring it through is a 5-line cubit change when product needs it.
 
   /// Temporary download location, kept inside the registry root so the
   /// post-download `rename()` stays atomic on the same filesystem.
@@ -288,6 +342,45 @@ class ModelPackRepository {
       await source.rename(targetPath);
     } on FileSystemException {
       await source.copy(targetPath);
+    }
+  }
+
+  /// Resolve the final download URL by following HF's redirect once
+  /// with the Authorization header attached. Returns the unwrapped
+  /// `cdn-lfs.huggingface.co` URL (signed query string carries the
+  /// auth from this point on). Falls back to the original URL on any
+  /// failure — the caller will then send Authorization on the GET as
+  /// a last-resort.
+  Future<String> _resolveDownloadUrl(
+    String archiveUrl,
+    Map<String, String>? headers,
+  ) async {
+    // Only HF gated-repo URLs need redirect unwrapping.
+    if (headers == null || headers.isEmpty) return archiveUrl;
+    final dio = Dio(BaseOptions(
+      followRedirects: false,
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+      // Treat 3xx as success so we can read the Location header.
+      validateStatus: (status) =>
+          status != null && status >= 200 && status < 400,
+    ));
+    try {
+      // HEAD avoids streaming the body just to read the redirect.
+      final response = await dio.head(
+        archiveUrl,
+        options: Options(headers: headers),
+      );
+      final location = response.headers.value(HttpHeaders.locationHeader);
+      if (location == null || location.isEmpty) return archiveUrl;
+      return location;
+    } on DioException {
+      // Network hiccup during the resolve step — fall back to handing
+      // the original URL to background_downloader. Worst case we hit
+      // the auth-strip throttle bug, but we still get *a* download.
+      return archiveUrl;
+    } finally {
+      dio.close();
     }
   }
 

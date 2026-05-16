@@ -1,0 +1,13 @@
+# Flutter localization codegen config.
+# Reads ARB files under `arb-dir`, emits `AppLocalizations` class
+# `output-class` at `output-localization-file` rooted at
+# `synthetic-package: false → lib/<output-dir>`. Canonical English
+# strings + metadata live in `template-arb-file`; new keys MUST be
+# added there first so all other ARBs are flagged by the analyzer
+# until they catch up.
+arb-dir: lib/l10n
+template-arb-file: app_en.arb
+output-localization-file: app_localizations.dart
+output-class: AppLocalizations
+output-dir: lib/l10n/generated
+nullable-getter: false

@@ -6,6 +6,7 @@ import '../../../../app/router.dart';
 import '../../../../app/theme.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../models/accessibility_profile.dart';
 import '../cubit/accessibility_cubit.dart';
 
@@ -26,8 +27,9 @@ class _AccessibilityView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('A few questions')),
+      appBar: AppBar(title: Text(l.accessibilityTitle)),
       body: SafeArea(
         child: BlocBuilder<AccessibilityCubit, AccessibilityProfile>(
           builder: (context, state) {
@@ -38,8 +40,8 @@ class _AccessibilityView extends StatelessWidget {
                   padding:
                       const EdgeInsets.fromLTRB(24, 8, 24, 16),
                   child: Text(
-                    'Your answers shape how Aegis routes you in an emergency. Answers stay on this device.',
-                    style: TextStyle(
+                    l.accessibilityBody,
+                    style: const TextStyle(
                       color: AegisColors.onSurfaceMuted,
                       fontSize: 14,
                       height: 1.4,
@@ -52,20 +54,19 @@ class _AccessibilityView extends StatelessWidget {
                         const EdgeInsets.symmetric(horizontal: 16),
                     children: [
                       _YesNoCard(
-                        question: 'Do you use a wheelchair?',
+                        question: l.accessibilityQuestionWheelchair,
                         value: state.usesWheelchair,
                         onChanged: (_) => cubit.toggleWheelchair(),
                       ),
                       const SizedBox(height: 12),
                       _YesNoCard(
-                        question: 'Do you take daily medication?',
+                        question: l.accessibilityQuestionMedication,
                         value: state.takesDailyMedication,
                         onChanged: (_) => cubit.toggleMedication(),
                       ),
                       const SizedBox(height: 12),
                       _YesNoCard(
-                        question:
-                            'Is there someone in your home who needs special help (child, elderly, disabled)?',
+                        question: l.accessibilityQuestionDependent,
                         value: state.hasDependent,
                         onChanged: (_) => cubit.toggleDependent(),
                       ),
@@ -83,7 +84,7 @@ class _AccessibilityView extends StatelessWidget {
                         if (!context.mounted) return;
                         context.go(AppRoute.contacts.path);
                       },
-                      child: const Text('Continue'),
+                      child: Text(l.actionContinue),
                     ),
                   ),
                 ),
@@ -122,25 +123,28 @@ class _YesNoCard extends StatelessWidget {
               style: const TextStyle(fontSize: 16, height: 1.35),
             ),
             const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: _Pill(
-                    label: 'No',
-                    selected: !value,
-                    onTap: () => onChanged(false),
+            Builder(builder: (context) {
+              final l = AppLocalizations.of(context);
+              return Row(
+                children: [
+                  Expanded(
+                    child: _Pill(
+                      label: l.accessibilityNo,
+                      selected: !value,
+                      onTap: () => onChanged(false),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _Pill(
-                    label: 'Yes',
-                    selected: value,
-                    onTap: () => onChanged(true),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: _Pill(
+                      label: l.accessibilityYes,
+                      selected: value,
+                      onTap: () => onChanged(true),
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              );
+            }),
           ],
         ),
       ),

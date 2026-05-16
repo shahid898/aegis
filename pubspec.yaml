@@ -152,6 +152,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Enable Flutter's built-in `gen_l10n` codegen. Reads `l10n.yaml` at
+  # project root + ARB files under `lib/l10n/` and emits a
+  # `AppLocalizations` class. Pick language at runtime drives ARB
+  # lookup; missing keys fall back to the canonical English ARB.
+  generate: true
   assets:
     - assets/languages/
     - assets/geo/

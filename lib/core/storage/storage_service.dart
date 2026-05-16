@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:hive_ce_flutter/hive_flutter.dart';
 
 import '../../models/accessibility_profile.dart';
@@ -38,6 +39,14 @@ class StorageService {
 
   Future<void> setSelectedLanguageCode(String code) =>
       _settings.put(StorageKeys.selectedLanguageCode, code);
+
+  /// Notifies on changes to [selectedLanguageCode]. The app shell
+  /// wraps `MaterialApp.router` in a `ValueListenableBuilder` against
+  /// this so picking a language during onboarding re-renders the
+  /// whole tree with the new `Locale` (drives Material/Cupertino
+  /// native widget translations + RTL flips without a restart).
+  ValueListenable<Box<String>> get languageListenable =>
+      _settings.listenable(keys: [StorageKeys.selectedLanguageCode]);
 
   // -- Region ---------------------------------------------------------------
 

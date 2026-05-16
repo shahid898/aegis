@@ -1,0 +1,211 @@
+// ignore: unused_import
+import 'package:intl/intl.dart' as intl;
+import 'app_localizations.dart';
+
+// ignore_for_file: type=lint
+
+/// The translations for English (`en`).
+class AppLocalizationsEn extends AppLocalizations {
+  AppLocalizationsEn([String locale = 'en']) : super(locale);
+
+  @override
+  String get appName => 'Aegis';
+
+  @override
+  String get splashTagline => 'Ready when the grid is not.';
+
+  @override
+  String get actionStart => 'Start';
+
+  @override
+  String get actionContinue => 'Continue';
+
+  @override
+  String get actionSkip => 'Skip';
+
+  @override
+  String get actionSkipForNow => 'Skip for now';
+
+  @override
+  String get actionRetry => 'Retry';
+
+  @override
+  String get actionSave => 'Save';
+
+  @override
+  String get actionCancel => 'Cancel';
+
+  @override
+  String get actionResume => 'Resume';
+
+  @override
+  String get actionAllow => 'Allow';
+
+  @override
+  String get actionOpenSettings => 'Open settings';
+
+  @override
+  String get actionAllowed => 'Allowed';
+
+  @override
+  String get readyTitle => 'You\'re ready.';
+
+  @override
+  String get readyBody =>
+      'Tap the icon anytime to ask Aegis a question. It works without internet.';
+
+  @override
+  String get languageTitle => 'Choose your language';
+
+  @override
+  String languageDetected(String language) {
+    return 'We detected $language. Confirm or pick another.';
+  }
+
+  @override
+  String get languageSearchHint => 'Search 140 languages';
+
+  @override
+  String get languageHearSample => 'Hear sample';
+
+  @override
+  String languageContinueIn(String language) {
+    return 'Continue in $language';
+  }
+
+  @override
+  String get regionTitle => 'Pick your region';
+
+  @override
+  String get regionUseGps => 'Use GPS';
+
+  @override
+  String get regionLocating => 'Locating...';
+
+  @override
+  String get regionTapHint => 'Tap the map to select your district';
+
+  @override
+  String get regionDownloadCta => 'Download data for this region';
+
+  @override
+  String get downloadTitle => 'Prepare offline voice';
+
+  @override
+  String get downloadHeading => 'Downloading voice models';
+
+  @override
+  String get downloadBody =>
+      'Aegis works fully offline after this one-time download. You can skip and run in text-only mode.';
+
+  @override
+  String downloadPercentComplete(String percent) {
+    return '$percent% complete';
+  }
+
+  @override
+  String get downloadPackInstalled => 'Installed';
+
+  @override
+  String downloadPackPending(String sizeMb) {
+    return '$sizeMb MB • pending';
+  }
+
+  @override
+  String downloadPackProgress(String receivedMb, String sizeMb) {
+    return '$receivedMb / $sizeMb MB';
+  }
+
+  @override
+  String get downloadVerifying => 'Verifying…';
+
+  @override
+  String get downloadExtracting => 'Extracting…';
+
+  @override
+  String get downloadFailed => 'Download failed.';
+
+  @override
+  String get accessibilityTitle => 'A few questions';
+
+  @override
+  String get accessibilityBody =>
+      'Your answers shape how Aegis routes you in an emergency. Answers stay on this device.';
+
+  @override
+  String get accessibilityQuestionWheelchair => 'Do you use a wheelchair?';
+
+  @override
+  String get accessibilityQuestionMedication => 'Do you take daily medication?';
+
+  @override
+  String get accessibilityQuestionDependent =>
+      'Is there someone in your home who needs special help (child, elderly, disabled)?';
+
+  @override
+  String get accessibilityYes => 'Yes';
+
+  @override
+  String get accessibilityNo => 'No';
+
+  @override
+  String get contactsTitle => 'Emergency contacts';
+
+  @override
+  String get contactsBody =>
+      'Up to 5. We forward briefings and beacon alerts to these people. Stored only on this device.';
+
+  @override
+  String get contactsEmpty => 'No contacts yet';
+
+  @override
+  String get contactsAdd => 'Add contact';
+
+  @override
+  String contactsAddWithCount(int count, int max) {
+    return 'Add contact ($count/$max)';
+  }
+
+  @override
+  String get contactsName => 'Name';
+
+  @override
+  String get contactsPhone => 'Phone';
+
+  @override
+  String get contactsPreferredLanguage => 'Preferred language';
+
+  @override
+  String get contactsSave => 'Save contact';
+
+  @override
+  String get permissionsTitle => 'Permissions';
+
+  @override
+  String get permissionMicrophoneTitle => 'Microphone';
+
+  @override
+  String get permissionMicrophoneBody =>
+      'Needed to hear your question and transcribe it on-device.';
+
+  @override
+  String get permissionCameraTitle => 'Camera';
+
+  @override
+  String get permissionCameraBody =>
+      'Needed to scan wounds, medicine labels, and surroundings offline.';
+
+  @override
+  String get permissionLocationTitle => 'Location';
+
+  @override
+  String get permissionLocationBody =>
+      'Needed to recommend routes and nearby shelters in your area.';
+
+  @override
+  String get permissionNotificationsTitle => 'Notifications';
+
+  @override
+  String get permissionNotificationsBody =>
+      'Needed to deliver emergency briefings and beacon alerts.';
+}

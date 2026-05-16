@@ -5,12 +5,14 @@ import '../../../../app/router.dart';
 import '../../../../app/theme.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 
 class ReadyPage extends StatelessWidget {
   const ReadyPage({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -40,14 +42,14 @@ class ReadyPage extends StatelessWidget {
               ),
               const SizedBox(height: 28),
               Text(
-                "You're ready.",
+                l.readyTitle,
                 style: Theme.of(context).textTheme.displayLarge,
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Tap the icon anytime to ask Aegis a question. It works without internet.',
+              Text(
+                l.readyBody,
                 textAlign: TextAlign.center,
-                style: TextStyle(
+                style: const TextStyle(
                   fontSize: 16,
                   color: AegisColors.onSurfaceMuted,
                   height: 1.5,
@@ -60,7 +62,7 @@ class ReadyPage extends StatelessWidget {
                   if (!context.mounted) return;
                   context.go(AppRoute.home.path);
                 },
-                child: const Text('Start'),
+                child: Text(l.actionStart),
               ),
             ],
           ),

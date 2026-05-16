@@ -7,6 +7,7 @@ import '../../../../app/theme.dart';
 import '../../../../core/constants/languages.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../models/language_option.dart';
 import '../cubit/contacts_cubit.dart';
 
@@ -27,13 +28,14 @@ class _ContactsView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Emergency contacts'),
+        title: Text(l.contactsTitle),
         actions: [
           TextButton(
             onPressed: () => context.go(AppRoute.permissions.path),
-            child: const Text('Skip'),
+            child: Text(l.actionSkip),
           ),
         ],
       ),
@@ -54,8 +56,8 @@ class _ContactsView extends StatelessWidget {
                   padding:
                       const EdgeInsets.fromLTRB(24, 8, 24, 12),
                   child: Text(
-                    'Up to 5. We forward briefings and beacon alerts to these people. Stored only on this device.',
-                    style: TextStyle(
+                    l.contactsBody,
+                    style: const TextStyle(
                       color: AegisColors.onSurfaceMuted,
                       height: 1.4,
                     ),
@@ -113,14 +115,17 @@ class _ContactsView extends StatelessWidget {
                             onPressed: () => _showAddSheet(context),
                             icon: const Icon(Icons.person_add_alt_1),
                             label: Text(
-                              'Add contact (${state.contacts.length}/${StorageService.maxContacts})',
+                              l.contactsAddWithCount(
+                                state.contacts.length,
+                                StorageService.maxContacts,
+                              ),
                             ),
                           ),
                         const SizedBox(height: 10),
                         FilledButton(
                           onPressed: () =>
                               context.go(AppRoute.permissions.path),
-                          child: const Text('Continue'),
+                          child: Text(l.actionContinue),
                         ),
                       ],
                     ),
@@ -163,8 +168,8 @@ class _EmptyState extends StatelessWidget {
               size: 48, color: AegisColors.onSurfaceMuted),
           const SizedBox(height: 10),
           Text(
-            'No contacts yet',
-            style: TextStyle(
+            AppLocalizations.of(context).contactsEmpty,
+            style: const TextStyle(
               color: AegisColors.onSurfaceMuted,
               fontSize: 15,
             ),
@@ -196,6 +201,7 @@ class _AddContactSheetState extends State<_AddContactSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final viewInsets = MediaQuery.viewInsetsOf(context).bottom;
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + viewInsets),
@@ -203,24 +209,25 @@ class _AddContactSheetState extends State<_AddContactSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Add contact',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+          Text(l.contactsAdd,
+              style:
+                  const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
           const SizedBox(height: 14),
           TextField(
             controller: _nameCtrl,
-            decoration: const InputDecoration(labelText: 'Name'),
+            decoration: InputDecoration(labelText: l.contactsName),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _phoneCtrl,
             keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone'),
+            decoration: InputDecoration(labelText: l.contactsPhone),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<LanguageOption>(
             initialValue: _language,
             decoration:
-                const InputDecoration(labelText: 'Preferred language'),
+                InputDecoration(labelText: l.contactsPreferredLanguage),
             isExpanded: true,
             items: SupportedLanguages.all
                 .map((l) => DropdownMenuItem(
@@ -241,7 +248,7 @@ class _AddContactSheetState extends State<_AddContactSheet> {
               if (!context.mounted) return;
               Navigator.of(context).pop();
             },
-            child: const Text('Save contact'),
+            child: Text(l.contactsSave),
           ),
         ],
       ),

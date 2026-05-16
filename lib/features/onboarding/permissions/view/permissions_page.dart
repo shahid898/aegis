@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../../app/router.dart';
 import '../../../../app/theme.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../cubit/permissions_cubit.dart';
 
 class PermissionsPage extends StatelessWidget {
@@ -22,33 +23,38 @@ class PermissionsPage extends StatelessWidget {
 class _PermissionsView extends StatelessWidget {
   const _PermissionsView();
 
-  static const _copy = <AegisPermission, (String, String, IconData)>{
-    AegisPermission.microphone: (
-      'Microphone',
-      'Needed to hear your question and transcribe it on-device.',
-      Icons.mic_none,
-    ),
-    AegisPermission.camera: (
-      'Camera',
-      'Needed to scan wounds, medicine labels, and surroundings offline.',
-      Icons.camera_alt_outlined,
-    ),
-    AegisPermission.location: (
-      'Location',
-      'Needed to recommend routes and nearby shelters in your area.',
-      Icons.location_on_outlined,
-    ),
-    AegisPermission.notifications: (
-      'Notifications',
-      'Needed to deliver emergency briefings and beacon alerts.',
-      Icons.notifications_none,
-    ),
-  };
+  static Map<AegisPermission, (String, String, IconData)> _copyFor(
+      AppLocalizations l) {
+    return {
+      AegisPermission.microphone: (
+        l.permissionMicrophoneTitle,
+        l.permissionMicrophoneBody,
+        Icons.mic_none,
+      ),
+      AegisPermission.camera: (
+        l.permissionCameraTitle,
+        l.permissionCameraBody,
+        Icons.camera_alt_outlined,
+      ),
+      AegisPermission.location: (
+        l.permissionLocationTitle,
+        l.permissionLocationBody,
+        Icons.location_on_outlined,
+      ),
+      AegisPermission.notifications: (
+        l.permissionNotificationsTitle,
+        l.permissionNotificationsBody,
+        Icons.notifications_none,
+      ),
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final copy = _copyFor(l);
     return Scaffold(
-      appBar: AppBar(title: const Text('Permissions')),
+      appBar: AppBar(title: Text(l.permissionsTitle)),
       body: SafeArea(
         child: BlocBuilder<PermissionsCubit, PermissionsState>(
           builder: (context, state) {
@@ -58,15 +64,15 @@ class _PermissionsView extends StatelessWidget {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
                     children: AegisPermission.values.map((perm) {
-                      final copy = _copy[perm]!;
+                      final entry = copy[perm]!;
                       final status =
                           state.statuses[perm] ?? PermissionStatus.denied;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _PermissionCard(
-                          title: copy.$1,
-                          description: copy.$2,
-                          icon: copy.$3,
+                          title: entry.$1,
+                          description: entry.$2,
+                          icon: entry.$3,
                           status: status,
                           onRequest: () =>
                               context.read<PermissionsCubit>().request(perm),
@@ -82,7 +88,7 @@ class _PermissionsView extends StatelessWidget {
                         const EdgeInsets.fromLTRB(24, 8, 24, 16),
                     child: FilledButton(
                       onPressed: () => context.go(AppRoute.ready.path),
-                      child: const Text('Continue'),
+                      child: Text(l.actionContinue),
                     ),
                   ),
                 ),
@@ -112,6 +118,7 @@ class _PermissionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final granted = status.isGranted || status.isLimited;
     return Material(
       color: Colors.white,
@@ -148,13 +155,13 @@ class _PermissionCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 10),
                   if (granted)
-                    const Row(
+                    Row(
                       children: [
-                        Icon(Icons.check_circle,
+                        const Icon(Icons.check_circle,
                             color: AegisColors.primary, size: 18),
-                        SizedBox(width: 6),
-                        Text('Allowed',
-                            style: TextStyle(color: AegisColors.primary)),
+                        const SizedBox(width: 6),
+                        Text(l.actionAllowed,
+                            style: const TextStyle(color: AegisColors.primary)),
                       ],
                     )
                   else
@@ -164,8 +171,8 @@ class _PermissionCard extends StatelessWidget {
                           : onRequest,
                       child: Text(
                         status.isPermanentlyDenied
-                            ? 'Open settings'
-                            : 'Allow',
+                            ? l.actionOpenSettings
+                            : l.actionAllow,
                       ),
                     ),
                 ],

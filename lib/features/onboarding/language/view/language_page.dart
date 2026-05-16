@@ -8,6 +8,7 @@ import '../../../../core/di/injection.dart';
 import '../../../../core/storage/storage_service.dart';
 import '../../../../core/voice/model_registry.dart';
 import '../../../../core/voice/tts_service.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../models/language_option.dart';
 import '../cubit/language_cubit.dart';
 
@@ -45,6 +46,7 @@ class _LanguageView extends StatelessWidget {
               ..showSnackBar(SnackBar(content: Text(msg)));
           },
           builder: (context, state) {
+            final l = AppLocalizations.of(context);
             return Column(
               children: [
                 Padding(
@@ -53,13 +55,13 @@ class _LanguageView extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Choose your language',
+                        l.languageTitle,
                         style: Theme.of(context).textTheme.headlineMedium,
                       ),
                       const SizedBox(height: 6),
                       if (state.detected != null)
                         Text(
-                          "We detected ${state.detected!.englishName}. Confirm or pick another.",
+                          l.languageDetected(state.detected!.englishName),
                           style: const TextStyle(
                             color: AegisColors.onSurfaceMuted,
                             height: 1.35,
@@ -69,7 +71,7 @@ class _LanguageView extends StatelessWidget {
                       TextField(
                         onChanged: context.read<LanguageCubit>().search,
                         decoration: InputDecoration(
-                          hintText: 'Search 140 languages',
+                          hintText: l.languageSearchHint,
                           prefixIcon: const Icon(Icons.search),
                           filled: true,
                           fillColor: Colors.white,
@@ -103,8 +105,9 @@ class _LanguageView extends StatelessWidget {
                 ),
                 _BottomBar(
                   enabled: state.selected != null,
-                  label:
-                      'Continue${state.selected == null ? '' : ' in ${state.selected!.nativeName}'}',
+                  label: state.selected == null
+                      ? l.actionContinue
+                      : l.languageContinueIn(state.selected!.nativeName),
                   onTap: () async {
                     await context.read<LanguageCubit>().confirm();
                     if (!context.mounted) return;
@@ -171,7 +174,7 @@ class _LanguageTile extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: 'Hear sample',
+                tooltip: AppLocalizations.of(context).languageHearSample,
                 icon: const Icon(Icons.volume_up_outlined),
                 onPressed: onPlay,
               ),

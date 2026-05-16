@@ -1,0 +1,112 @@
+{
+  "@@locale": "en",
+
+  "appName": "Aegis",
+  "@appName": {
+    "description": "Application name. Do not translate."
+  },
+
+  "splashTagline": "Ready when the grid is not.",
+  "@splashTagline": {
+    "description": "Tagline shown on the splash screen."
+  },
+
+  "actionStart": "Start",
+  "actionContinue": "Continue",
+  "actionSkip": "Skip",
+  "actionSkipForNow": "Skip for now",
+  "actionRetry": "Retry",
+  "actionSave": "Save",
+  "actionCancel": "Cancel",
+  "actionResume": "Resume",
+  "actionAllow": "Allow",
+  "actionOpenSettings": "Open settings",
+  "actionAllowed": "Allowed",
+
+  "readyTitle": "You're ready.",
+  "readyBody": "Tap the icon anytime to ask Aegis a question. It works without internet.",
+
+  "languageTitle": "Choose your language",
+  "languageDetected": "We detected {language}. Confirm or pick another.",
+  "@languageDetected": {
+    "description": "Inline hint after auto-detecting the device language.",
+    "placeholders": {
+      "language": { "type": "String", "example": "English" }
+    }
+  },
+  "languageSearchHint": "Search 140 languages",
+  "languageHearSample": "Hear sample",
+  "languageContinueIn": "Continue in {language}",
+  "@languageContinueIn": {
+    "placeholders": {
+      "language": { "type": "String", "example": "हिन्दी" }
+    }
+  },
+
+  "regionTitle": "Pick your region",
+  "regionUseGps": "Use GPS",
+  "regionLocating": "Locating...",
+  "regionTapHint": "Tap the map to select your district",
+  "regionDownloadCta": "Download data for this region",
+
+  "downloadTitle": "Prepare offline voice",
+  "downloadHeading": "Downloading voice models",
+  "downloadBody": "Aegis works fully offline after this one-time download. You can skip and run in text-only mode.",
+  "downloadPercentComplete": "{percent}% complete",
+  "@downloadPercentComplete": {
+    "placeholders": {
+      "percent": { "type": "String", "example": "42" }
+    }
+  },
+  "downloadPackInstalled": "Installed",
+  "downloadPackPending": "{sizeMb} MB • pending",
+  "@downloadPackPending": {
+    "placeholders": {
+      "sizeMb": { "type": "String", "example": "420" }
+    }
+  },
+  "downloadPackProgress": "{receivedMb} / {sizeMb} MB",
+  "@downloadPackProgress": {
+    "placeholders": {
+      "receivedMb": { "type": "String", "example": "12.4" },
+      "sizeMb": { "type": "String", "example": "420" }
+    }
+  },
+  "downloadVerifying": "Verifying…",
+  "downloadExtracting": "Extracting…",
+  "downloadFailed": "Download failed.",
+
+  "accessibilityTitle": "A few questions",
+  "accessibilityBody": "Your answers shape how Aegis routes you in an emergency. Answers stay on this device.",
+  "accessibilityQuestionWheelchair": "Do you use a wheelchair?",
+  "accessibilityQuestionMedication": "Do you take daily medication?",
+  "accessibilityQuestionDependent": "Is there someone in your home who needs special help (child, elderly, disabled)?",
+  "accessibilityYes": "Yes",
+  "accessibilityNo": "No",
+
+  "contactsTitle": "Emergency contacts",
+  "contactsBody": "Up to 5. We forward briefings and beacon alerts to these people. Stored only on this device.",
+  "contactsEmpty": "No contacts yet",
+  "contactsAdd": "Add contact",
+  "contactsAddWithCount": "Add contact ({count}/{max})",
+  "@contactsAddWithCount": {
+    "placeholders": {
+      "count": { "type": "int", "example": "1" },
+      "max": { "type": "int", "example": "5" }
+    }
+  },
+  "contactsName": "Name",
+  "contactsPhone": "Phone",
+  "contactsPreferredLanguage": "Preferred language",
+  "contactsSave": "Save contact",
+
+  "permissionsTitle": "Permissions",
+  "permissionMicrophoneTitle": "Microphone",
+  "permissionMicrophoneBody": "Needed to hear your question and transcribe it on-device.",
+  "permissionCameraTitle": "Camera",
+  "permissionCameraBody": "Needed to scan wounds, medicine labels, and surroundings offline.",
+  "permissionLocationTitle": "Location",
+  "permissionLocationBody": "Needed to recommend routes and nearby shelters in your area.",
+  "permissionNotificationsTitle": "Notifications",
+  "permissionNotificationsBody": "Needed to deliver emergency briefings and beacon alerts."
+}

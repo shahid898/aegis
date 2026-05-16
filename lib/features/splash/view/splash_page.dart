@@ -6,6 +6,7 @@ import '../../../app/router.dart';
 import '../../../app/theme.dart';
 import '../../../core/di/injection.dart';
 import '../../../core/storage/storage_service.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../cubit/splash_cubit.dart';
 
 class SplashPage extends StatelessWidget {
@@ -64,9 +65,9 @@ class _SplashView extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 28),
-            const Text(
-              'Aegis',
-              style: TextStyle(
+            Text(
+              AppLocalizations.of(context).appName,
+              style: const TextStyle(
                 fontSize: 40,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
@@ -75,7 +76,7 @@ class _SplashView extends StatelessWidget {
             ),
             const SizedBox(height: 10),
             Text(
-              'Ready when the grid is not.',
+              AppLocalizations.of(context).splashTagline,
               style: TextStyle(
                 fontSize: 15,
                 color: Colors.white.withValues(alpha: 0.75),

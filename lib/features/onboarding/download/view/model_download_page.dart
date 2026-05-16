@@ -11,6 +11,7 @@ import '../../../../core/storage/storage_service.dart';
 import '../../../../core/voice/model_pack.dart';
 import '../../../../core/voice/model_pack_repository.dart';
 import '../../../../core/voice/model_registry.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../cubit/model_download_cubit.dart';
 
 class ModelDownloadPage extends StatelessWidget {
@@ -39,8 +40,9 @@ class _DownloadView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Prepare offline voice')),
+      appBar: AppBar(title: Text(l.downloadTitle)),
       body: SafeArea(
         child: BlocConsumer<ModelDownloadCubit, ModelDownloadState>(
           listenWhen: (prev, next) => prev.status != next.status,
@@ -56,14 +58,13 @@ class _DownloadView extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Downloading voice models',
+                    l.downloadHeading,
                     style: Theme.of(context).textTheme.headlineMedium,
                   ),
                   const SizedBox(height: 8),
-                  const Text(
-                    'Aegis works fully offline after this one-time '
-                    'download. You can skip and run in text-only mode.',
-                    style: TextStyle(
+                  Text(
+                    l.downloadBody,
+                    style: const TextStyle(
                       color: AegisColors.onSurfaceMuted,
                       height: 1.35,
                     ),
@@ -173,7 +174,9 @@ class _OverallProgress extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          '${(state.overallFraction * 100).toStringAsFixed(0)}% complete',
+          AppLocalizations.of(context).downloadPercentComplete(
+            (state.overallFraction * 100).toStringAsFixed(0),
+          ),
           style: const TextStyle(color: AegisColors.onSurfaceMuted),
         ),
       ],
@@ -189,6 +192,7 @@ class _PackTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     final installed = state.installedIds.contains(pack.id);
     final isCurrent = state.currentPack?.id == pack.id && !installed;
     final sizeMb = (pack.approxBytes / (1024 * 1024)).toStringAsFixed(0);
@@ -216,10 +220,10 @@ class _PackTile extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     installed
-                        ? 'Installed'
+                        ? l.downloadPackInstalled
                         : isCurrent
-                            ? _currentSubtitle(state, sizeMb)
-                            : '$sizeMb MB • pending',
+                            ? _currentSubtitle(l, state, sizeMb)
+                            : l.downloadPackPending(sizeMb),
                     style: const TextStyle(
                       color: AegisColors.onSurfaceMuted,
                       fontSize: 13,
@@ -234,13 +238,15 @@ class _PackTile extends StatelessWidget {
     );
   }
 
-  String _currentSubtitle(ModelDownloadState state, String sizeMb) {
+  String _currentSubtitle(
+      AppLocalizations l, ModelDownloadState state, String sizeMb) {
     return switch (state.status) {
-      DownloadStatus.downloading =>
-        '${(state.currentReceivedBytes / (1024 * 1024)).toStringAsFixed(1)} '
-            '/ $sizeMb MB',
-      DownloadStatus.verifying => 'Verifying…',
-      DownloadStatus.extracting => 'Extracting…',
+      DownloadStatus.downloading => l.downloadPackProgress(
+          (state.currentReceivedBytes / (1024 * 1024)).toStringAsFixed(1),
+          sizeMb,
+        ),
+      DownloadStatus.verifying => l.downloadVerifying,
+      DownloadStatus.extracting => l.downloadExtracting,
       _ => '$sizeMb MB',
     };
   }
@@ -280,6 +286,7 @@ class _Actions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     if (state.status == DownloadStatus.failed) {
       return Column(
         children: [
@@ -290,7 +297,7 @@ class _Actions extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
-              state.errorMessage ?? 'Download failed.',
+              state.errorMessage ?? l.downloadFailed,
               style: const TextStyle(color: AegisColors.danger),
             ),
           ),
@@ -300,14 +307,14 @@ class _Actions extends StatelessWidget {
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => context.go(AppRoute.accessibility.path),
-                  child: const Text('Skip for now'),
+                  child: Text(l.actionSkipForNow),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton(
                   onPressed: () => context.read<ModelDownloadCubit>().start(),
-                  child: const Text('Retry'),
+                  child: Text(l.actionRetry),
                 ),
               ),
             ],
@@ -319,7 +326,7 @@ class _Actions extends StatelessWidget {
     if (state.allInstalled || state.status == DownloadStatus.completed) {
       return FilledButton(
         onPressed: () => context.go(AppRoute.accessibility.path),
-        child: const Text('Continue'),
+        child: Text(l.actionContinue),
       );
     }
 
@@ -331,7 +338,7 @@ class _Actions extends StatelessWidget {
               context.read<ModelDownloadCubit>().skip();
               context.go(AppRoute.accessibility.path);
             },
-            child: const Text('Skip for now'),
+            child: Text(l.actionSkipForNow),
           ),
         ),
         const SizedBox(width: 12),
@@ -342,8 +349,8 @@ class _Actions extends StatelessWidget {
                 : () => context.read<ModelDownloadCubit>().start(),
             child: Text(
               state.status == DownloadStatus.downloading
-                  ? 'Cancel'
-                  : 'Resume',
+                  ? l.actionCancel
+                  : l.actionResume,
             ),
           ),
         ),

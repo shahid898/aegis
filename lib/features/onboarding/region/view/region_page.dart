@@ -8,6 +8,7 @@ import '../../../../app/theme.dart';
 import '../../../../core/di/injection.dart';
 import '../../../../core/geo/country_resolver.dart';
 import '../../../../core/storage/storage_service.dart';
+import '../../../../l10n/generated/app_localizations.dart';
 import '../cubit/region_cubit.dart';
 
 class RegionPage extends StatelessWidget {
@@ -34,6 +35,29 @@ class _RegionViewState extends State<_RegionView> {
   final _mapController = MapController();
 
   @override
+  void initState() {
+    super.initState();
+    // Auto-trigger GPS lookup the moment the page mounts so the user
+    // doesn't have to tap the header icon. Honors existing permission
+    // grants; cubit shows the "Locating..." chip + error toast on
+    // failure. Schedule after the first frame so BlocProvider has
+    // wired up the cubit.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final cubit = context.read<RegionCubit>();
+      // Skip when we already have a region (e.g. user came back from
+      // a later step).
+      if (cubit.state.region != null) return;
+      await cubit.useCurrentLocation();
+      if (!mounted) return;
+      final point = cubit.state.pickedPoint;
+      if (point != null) {
+        _mapController.move(point, 10);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _mapController.dispose();
     super.dispose();
@@ -41,9 +65,10 @@ class _RegionViewState extends State<_RegionView> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pick your region'),
+        title: Text(l.regionTitle),
         actions: [
           IconButton(
             onPressed: () async {
@@ -55,7 +80,7 @@ class _RegionViewState extends State<_RegionView> {
               }
             },
             icon: const Icon(Icons.my_location),
-            tooltip: 'Use GPS',
+            tooltip: l.regionUseGps,
           ),
         ],
       ),
@@ -100,10 +125,10 @@ class _RegionViewState extends State<_RegionView> {
                       ],
                     ),
                     if (state.isResolvingGps)
-                      const Positioned(
+                      Positioned(
                         top: 12,
                         right: 12,
-                        child: _ChipBadge(label: 'Locating...'),
+                        child: _ChipBadge(label: l.regionLocating),
                       ),
                     if (state.errorMessage != null)
                       Positioned(
@@ -133,7 +158,7 @@ class _RegionViewState extends State<_RegionView> {
                   children: [
                     Text(
                       state.region == null
-                          ? 'Tap the map to select your district'
+                          ? l.regionTapHint
                           : state.region!.districtName,
                       style: const TextStyle(
                         fontSize: 17,
@@ -165,7 +190,7 @@ class _RegionViewState extends State<_RegionView> {
                             if (!context.mounted) return;
                             context.go(AppRoute.download.path);
                           },
-                    child: const Text('Download data for this region'),
+                    child: Text(l.regionDownloadCta),
                   ),
                 ),
               ),

@@ -4,12 +4,14 @@
 
 When a cyclone takes the cell towers down, your emergency app cannot phone home. Aegis is the assistant that still answers when the bars are gone: it transcribes survivor statements, grades damage photos against the FEMA HAZUS scale, files ICS-209 / OCHA SITREP reports, classifies inbound WEA / Cell-Broadcast alerts, and shows nearby shelters / hospitals / water points on an offline basemap — all on a mid-range Android phone in airplane mode.
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  📱  Aegis  ·  Gemma 4 E2B IT  ·  Piper TTS  ·  OSM POI  │
-│      No network after onboarding · One model · Many roles│
-└──────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white" />
+  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.41-02569B?logo=flutter&logoColor=white" />
+  <img alt="Gemma 4" src="https://img.shields.io/badge/Gemma%204-E2B%20IT-4285F4?logo=google&logoColor=white" />
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-LiteRT--LM-FF6F00" />
+  <img alt="Offline" src="https://img.shields.io/badge/offline-first-2E7D32" />
+  <img alt="License" src="https://img.shields.io/badge/license-see%20LICENSE-555" />
+</p>
 
 ---
 

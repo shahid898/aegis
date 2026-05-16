@@ -27,17 +27,9 @@ When a cyclone takes the cell towers down, your emergency app cannot phone home.
 
 ## Architecture at a glance
 
-```mermaid
-flowchart LR
-  USER[User] -->|voice / SMS / photo| APP[Aegis Flutter app]
-  APP --> GEMMA[Gemma 4 E2B IT<br/>LiteRT-LM]
-  APP --> POI[(sqflite<br/>OSM POIs)]
-  APP --> TILES[(ObjectBox<br/>CARTO tiles)]
-  APP --> NATIVE[Kotlin alert plugin<br/>siren · wake-lock · CB/WEA]
-  GEMMA -.->|render_triage_report| APP
-  GEMMA -.->|render_map_view| APP
-  GEMMA -.->|ASR / chat / vision| APP
-```
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="Aegis architecture: user → Flutter app → Gemma 4 brain · offline POI / tile stores · native alert plugin" width="900" />
+</p>
 
 Deeper dive: see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) for sequence diagrams of the chat-turn loop, alert pipeline, cold-start emergency, and the full repo layout.
 

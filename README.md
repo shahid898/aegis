@@ -64,7 +64,7 @@ fvm dart run build_runner build --delete-conflicting-outputs
 fvm flutter run -d <device-id>
 ```
 
-First launch downloads the model packs (Gemma 4 IT `.litertlm`, Piper voices, Silero VAD) plus seeds the offline place database + map tiles for the region you pick. Budget ~5 minutes on a fast connection. After that everything works offline.
+First launch downloads the model packs (Gemma 4 IT `.litertlm`, Piper voices, Silero VAD) plus seeds the offline place database + map tiles for the region you pick. Budget **10-15 minutes** on a typical mobile connection (faster on Wi-Fi, longer on flaky 4G). After that everything works offline.
 
 ### Release build
 

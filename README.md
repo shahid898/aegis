@@ -10,7 +10,7 @@ When a cyclone takes the cell towers down, your emergency app cannot phone home.
   <img alt="Gemma 4" src="https://img.shields.io/badge/Gemma%204-E2B%20IT-4285F4?logo=google&logoColor=white" />
   <img alt="Runtime" src="https://img.shields.io/badge/runtime-LiteRT--LM-FF6F00" />
   <img alt="Offline" src="https://img.shields.io/badge/offline-first-2E7D32" />
-  <img alt="License" src="https://img.shields.io/badge/license-see%20LICENSE-555" />
+  <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue" />
 </p>
 
 ---
@@ -29,9 +29,7 @@ When a cyclone takes the cell towers down, your emergency app cannot phone home.
 
 ## Architecture at a glance
 
-<p align="center">
-  <img src="docs/images/architecture.svg" alt="Aegis architecture: user → Flutter app → Gemma 4 brain · offline POI / tile stores · native alert plugin" width="900" />
-</p>
+<img src="docs/images/architecture.svg" alt="Aegis architecture: user → Flutter app → Gemma 4 brain · offline POI / tile stores · native alert plugin" width="100%" />
 
 Deeper dive: see [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) for sequence diagrams of the chat-turn loop, alert pipeline, cold-start emergency, and the full repo layout.
 
@@ -316,8 +314,36 @@ Conventional commits format. Native Android changes need a build verified agains
 
 ---
 
+## Platform Caveats — Cell-Broadcast & WEA
+
+Before forking with intent to ship: the over-the-air emergency-broadcast receiver path is gated by Android's signature-permission model.
+
+| Surface | Android permission | Who can hold it |
+|---|---|---|
+| Inbound **SMS** (P2P) | `RECEIVE_SMS` | Any app (runtime permission) |
+| Inbound **Cell-Broadcast / WEA / ETWS / CMAS** | `RECEIVE_EMERGENCY_BROADCAST`, `READ_CELL_BROADCASTS` | **Signature-only** — system / OEM-signed apps only |
+| **MessagingApp role** (default-SMS path used to read CB by some OEMs) | `RoleManager.ROLE_SMS` | One app at a time, user must grant |
+
+`RECEIVE_EMERGENCY_BROADCAST` is declared `signature|privileged` in `frameworks/base/core/res/AndroidManifest.xml`. A regular sideloaded or Play-Store APK **cannot** be granted it — Android's `PackageManager` refuses at install time. Consequences for Aegis:
+
+- **As-is consumer APK** receives regular SMS messages and any Cell-Broadcast that the OEM happens to broadcast via the public `android.provider.Telephony.SMS_RECEIVED` action (vendor-dependent — Samsung exposes more than stock AOSP, for instance).
+- **Full WEA / Presidential / Tsunami / Amber alert reception** requires either:
+  1. **OEM partnership** — the APK is signed with the platform certificate and bundled in `/system/priv-app/`, OR
+  2. **MNO / regulator deal** — carrier-signed firmware update bundles Aegis as a system app, OR
+  3. **MDM enrolment** — on managed Android Enterprise fleets a device-owner DPC can grant `READ_CELL_BROADCASTS`.
+
+For demos and field tests we use the **`AlertConstants.SIMULATE_CB_INTENT` debug action** (see `android/app/src/main/kotlin/com/resq/aegis/alert/`) to inject synthetic alerts via `adb shell am broadcast …`. This exercises the full Kotlin → Dart → Gemma 4 routing pipeline without needing platform-level permission.
+
+If you ship to consumers as a regular app, document the limitation in your store listing. The siren + briefing + map all still work for **SMS-borne** disaster alerts (which is how many countries still distribute warnings) — only the over-the-air CB receiver path is gated.
+
+---
+
 ## License
 
-See [`LICENSE`](LICENSE) at the repo root.
+Aegis is released under the **Apache License 2.0** — see [`LICENSE`](LICENSE) at the repo root. Apache 2.0 was picked over MIT because the project ships native AOSP integrations and may attract contributions from telco / OEM partners; the explicit patent grant matters there.
 
-Map tiles © OpenStreetMap contributors, © CARTO. POI data © OpenStreetMap contributors via Overpass.
+Third-party attribution:
+- Map tiles © OpenStreetMap contributors, © CARTO.
+- POI data © OpenStreetMap contributors via Overpass.
+- Gemma 4 weights are used under the Gemma Terms of Use (separate from Aegis source code).
+

@@ -27,30 +27,6 @@ When a cyclone takes the cell towers down, your emergency app cannot phone home.
 
 ---
 
-## Platform Caveats — Cell-Broadcast & WEA
-
-Read this before forking with intent to ship: the over-the-air emergency-broadcast receiver path is gated by Android's signature-permission model.
-
-| Surface | Android permission | Who can hold it |
-|---|---|---|
-| Inbound **SMS** (P2P) | `RECEIVE_SMS` | Any app (runtime permission) |
-| Inbound **Cell-Broadcast / WEA / ETWS / CMAS** | `RECEIVE_EMERGENCY_BROADCAST`, `READ_CELL_BROADCASTS` | **Signature-only** — system / OEM-signed apps only |
-| **MessagingApp role** (default-SMS path used to read CB by some OEMs) | `RoleManager.ROLE_SMS` | One app at a time, user must grant |
-
-`RECEIVE_EMERGENCY_BROADCAST` is declared `signature|privileged` in `frameworks/base/core/res/AndroidManifest.xml`. A regular sideloaded or Play-Store APK **cannot** be granted it — Android's `PackageManager` refuses at install time. Consequences for Aegis:
-
-- **As-is consumer APK** receives regular SMS messages and any Cell-Broadcast that the OEM happens to broadcast via the public `android.provider.Telephony.SMS_RECEIVED` action (vendor-dependent — Samsung exposes more than stock AOSP, for instance).
-- **Full WEA / Presidential / Tsunami / Amber alert reception** requires either:
-  1. **OEM partnership** — the APK is signed with the platform certificate and bundled in `/system/priv-app/`, OR
-  2. **MNO / regulator deal** — carrier-signed firmware update bundles Aegis as a system app, OR
-  3. **MDM enrolment** — on managed Android Enterprise fleets a device-owner DPC can grant `READ_CELL_BROADCASTS`.
-
-For demos and field tests we use the **`AlertConstants.SIMULATE_CB_INTENT` debug action** (see `android/app/src/main/kotlin/com/resq/aegis/alert/`) to inject synthetic alerts via `adb shell am broadcast …`. This exercises the full Kotlin → Dart → Gemma 4 routing pipeline without needing platform-level permission.
-
-If you ship to consumers as a regular app, document the limitation in your store listing. The siren + briefing + map all still work for **SMS-borne** disaster alerts (which is how many countries still distribute warnings) — only the over-the-air CB receiver path is gated.
-
----
-
 ## Architecture at a glance
 
 <p align="center">
@@ -337,6 +313,30 @@ Conventional commits format. Native Android changes need a build verified agains
 - **CARTO** — Voyager raster basemap
 - **flutter_map_tile_caching** — JaffaKetchup
 - **ICS-209 / OCHA SITREP / FEMA HAZUS** — public-sector incident-report templates
+
+---
+
+## Platform Caveats — Cell-Broadcast & WEA
+
+Before forking with intent to ship: the over-the-air emergency-broadcast receiver path is gated by Android's signature-permission model.
+
+| Surface | Android permission | Who can hold it |
+|---|---|---|
+| Inbound **SMS** (P2P) | `RECEIVE_SMS` | Any app (runtime permission) |
+| Inbound **Cell-Broadcast / WEA / ETWS / CMAS** | `RECEIVE_EMERGENCY_BROADCAST`, `READ_CELL_BROADCASTS` | **Signature-only** — system / OEM-signed apps only |
+| **MessagingApp role** (default-SMS path used to read CB by some OEMs) | `RoleManager.ROLE_SMS` | One app at a time, user must grant |
+
+`RECEIVE_EMERGENCY_BROADCAST` is declared `signature|privileged` in `frameworks/base/core/res/AndroidManifest.xml`. A regular sideloaded or Play-Store APK **cannot** be granted it — Android's `PackageManager` refuses at install time. Consequences for Aegis:
+
+- **As-is consumer APK** receives regular SMS messages and any Cell-Broadcast that the OEM happens to broadcast via the public `android.provider.Telephony.SMS_RECEIVED` action (vendor-dependent — Samsung exposes more than stock AOSP, for instance).
+- **Full WEA / Presidential / Tsunami / Amber alert reception** requires either:
+  1. **OEM partnership** — the APK is signed with the platform certificate and bundled in `/system/priv-app/`, OR
+  2. **MNO / regulator deal** — carrier-signed firmware update bundles Aegis as a system app, OR
+  3. **MDM enrolment** — on managed Android Enterprise fleets a device-owner DPC can grant `READ_CELL_BROADCASTS`.
+
+For demos and field tests we use the **`AlertConstants.SIMULATE_CB_INTENT` debug action** (see `android/app/src/main/kotlin/com/resq/aegis/alert/`) to inject synthetic alerts via `adb shell am broadcast …`. This exercises the full Kotlin → Dart → Gemma 4 routing pipeline without needing platform-level permission.
+
+If you ship to consumers as a regular app, document the limitation in your store listing. The siren + briefing + map all still work for **SMS-borne** disaster alerts (which is how many countries still distribute warnings) — only the over-the-air CB receiver path is gated.
 
 ---
 

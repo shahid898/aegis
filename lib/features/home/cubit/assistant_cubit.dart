@@ -139,6 +139,10 @@ abstract class AssistantState with _$AssistantState {
     @Default(false) bool thinkingForReport,
     Uint8List? intakeImagePreview,
     String? languageCode,
+    /// True while the LLM engine is paying its first-run cold-start
+    /// cost (shader compile + KV-cache prefill, 10-30 s on Mali/Adreno
+    /// GPUs). Drives the home page's "Preparing AI engine…" overlay.
+    @Default(false) bool engineWarming,
   }) = _AssistantState;
 
   const AssistantState._();
@@ -429,7 +433,22 @@ class AssistantCubit extends Cubit<AssistantState> {
       final vad = plan.vad.isNotEmpty ? plan.vad.first : null;
       final llm = plan.llm.isNotEmpty ? plan.llm.first : null;
 
-      if (ttsPacks.isNotEmpty) _tts.loadAll(ttsPacks).ignore();
+      // Block on TTS load. Earlier code used `.ignore()` which raced
+      // against the first user turn: if the user spoke before sherpa
+      // finished loading, [TtsService.enqueue] threw and the cubit
+      // silently swallowed the error (unawaited) — that was the
+      // "sometimes TTS plays, sometimes not" symptom. Bootstrap is
+      // already gated behind the "preparing" stage so the extra wait
+      // is invisible.
+      if (ttsPacks.isNotEmpty) {
+        try {
+          await _tts.loadAll(ttsPacks);
+        } on Object catch (e) {
+          if (kDebugMode) {
+            debugPrint('[Aegis][Cubit] TTS load failed (non-fatal): $e');
+          }
+        }
+      }
       if (vad != null) _stt.setVadPack(vad);
       if (llm != null) {
         _llm.setPack(llm);
@@ -445,7 +464,13 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
 
       _voiceReady = true;
-      emit(state.copyWith(stage: AssistantStage.idle));
+      emit(state.copyWith(stage: AssistantStage.idle, engineWarming: true));
+      // Pay the cold-start tax now while the user is staring at the
+      // home screen with nothing to do, instead of on their first
+      // question. Native GPU shader compile + first KV-cache prefill
+      // is 10-30s on Mali/Adreno; the UI shows a "Preparing AI
+      // engine…" hint until this completes.
+      unawaited(_warmEngine());
     } on Object catch (e) {
       emit(
         state.copyWith(
@@ -453,6 +478,26 @@ class AssistantCubit extends Cubit<AssistantState> {
           errorMessage: e.toString(),
         ),
       );
+    }
+  }
+
+  Future<void> _warmEngine() async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      await _llm.warmUp();
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] engine warm-up done in ${stopwatch.elapsedMilliseconds}ms',
+        );
+      }
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint('[Aegis][Cubit] engine warm-up failed (non-fatal): $e');
+      }
+    } finally {
+      if (!isClosed) {
+        emit(state.copyWith(engineWarming: false));
+      }
     }
   }
 
@@ -722,6 +767,13 @@ class AssistantCubit extends Cubit<AssistantState> {
       return null;
     }
 
+    // Mic-open cue. The chat-start cue in [startConversation] only
+    // fires once per session; this fires every utterance turn so a
+    // long conversation keeps audible feedback when the mic flips
+    // hot between turns.
+    unawaited(HapticFeedback.mediumImpact());
+    unawaited(SystemSound.play(SystemSoundType.click));
+
     emit(state.copyWith(
       stage: AssistantStage.listening,
       transcript: '',
@@ -795,6 +847,9 @@ class AssistantCubit extends Cubit<AssistantState> {
     } on Object {
       // best-effort
     }
+    // Listening-stopped cue.
+    unawaited(HapticFeedback.lightImpact());
+    unawaited(SystemSound.play(SystemSoundType.click));
     return captured;
   }
 
@@ -1222,6 +1277,32 @@ class AssistantCubit extends Cubit<AssistantState> {
       _intakeStubRequested.add('Voice models are not ready yet.');
       return;
     }
+
+    // Race-fix: if the chat listen loop already has the recorder hot
+    // ("AudioRecorderService.startStream called while already
+    // recording"), tear it down before we acquire the mic for intake.
+    // This happens when the user taps the triage chip while a normal
+    // listening turn is in-flight. We end the conversation first so
+    // STT releases the recorder, then proceed.
+    if (_conversationActive || _recorder.isRecording) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] intake voice: stopping in-flight listen '
+          '(conversationActive=$_conversationActive '
+          'recording=${_recorder.isRecording})',
+        );
+      }
+      try {
+        await stopConversation();
+      } on Object {
+        // best-effort
+      }
+      // Small grace so the underlying mic session fully releases
+      // before we ask for it again — flutter_sound's stop() can race
+      // with start() on the same isolate.
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+
     if (!_recorder.isOpen) {
       try {
         await _recorder.open();
@@ -1249,6 +1330,10 @@ class AssistantCubit extends Cubit<AssistantState> {
       _intakeStubRequested.add('Could not start recording.');
       return;
     }
+
+    // Listening cue: tactile + system click so user knows mic is hot.
+    unawaited(HapticFeedback.mediumImpact());
+    unawaited(SystemSound.play(SystemSoundType.click));
 
     emit(state.copyWith(stage: AssistantStage.listening));
 
@@ -1280,6 +1365,17 @@ class AssistantCubit extends Cubit<AssistantState> {
       } on Object {
         // best-effort
       }
+      // Exit the listening stage immediately so the UI's "Listening…"
+      // hint can't linger past capture-end. Stage will be overwritten
+      // by the wav-non-null branch below if needed.
+      if (state.stage == AssistantStage.listening) {
+        emit(state.copyWith(stage: AssistantStage.idle));
+      }
+      // Capture-complete cue: short click + light haptic so user
+      // hears the recording closed even when there's no transcript
+      // to render (silent / failed capture).
+      unawaited(HapticFeedback.lightImpact());
+      unawaited(SystemSound.play(SystemSoundType.click));
     }
 
     if (wav == null || wav.isEmpty) {

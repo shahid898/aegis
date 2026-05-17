@@ -516,13 +516,22 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
                     image: turn.userImage,
                     audio: turn.userAudio,
                   ),
+                // Triage turns: the TriageReportCard IS the assistant
+                // reply — rendering the assistant text bubble too would
+                // duplicate the same summary/title in plain text right
+                // above the structured card. Only render the assistant
+                // text bubble when there's no report attached (normal
+                // chat turn) or when the model produced standalone
+                // prose alongside the tool call.
+                if (turn.report == null) ...[
                   const SizedBox(height: 12),
-                _Bubble(
-                  label: 'Aegis',
-                  text: turn.assistant,
-                  align: CrossAxisAlignment.start,
-                  background: Colors.white,
-                ),
+                  _Bubble(
+                    label: 'Aegis',
+                    text: turn.assistant,
+                    align: CrossAxisAlignment.start,
+                    background: Colors.white,
+                  ),
+                ],
                 if (turn.report != null) ...[
                   const SizedBox(height: 12),
                   TriageReportCard(report: turn.report!),
@@ -829,6 +838,39 @@ class _StatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
+    // Engine warming is a non-error info state — render it on its own
+    // info-tinted banner so users don't think it's a failure.
+    if (state.engineWarming &&
+        state.stage != AssistantStage.degraded &&
+        state.stage != AssistantStage.error) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AegisColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                l.homeEnginePreparing,
+                style: const TextStyle(
+                  color: AegisColors.onSurface,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final message = switch (state.stage) {
       AssistantStage.degraded => l.homeVoiceDegraded,
       AssistantStage.error => state.errorMessage ?? l.homeSomethingWentWrong,

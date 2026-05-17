@@ -14,7 +14,10 @@ T _$identity<T>(T value) => value;
 /// @nodoc
 mixin _$AssistantState implements DiagnosticableTreeMixin {
 
- AssistantStage get stage; String get transcript; String get response; List<ConversationTurn> get turns; bool get surfaceReady; String get thinkingTrace; String? get errorMessage; Uint8List? get pendingUserImage; Uint8List? get pendingUserAudio; bool get intakeOpen; String get intakeText; bool get intakeHasPhoto; bool get intakeHasAudio; bool get thinkingForReport; Uint8List? get intakeImagePreview; String? get languageCode;
+ AssistantStage get stage; String get transcript; String get response; List<ConversationTurn> get turns; bool get surfaceReady; String get thinkingTrace; String? get errorMessage; Uint8List? get pendingUserImage; Uint8List? get pendingUserAudio; bool get intakeOpen; String get intakeText; bool get intakeHasPhoto; bool get intakeHasAudio; bool get thinkingForReport; Uint8List? get intakeImagePreview; String? get languageCode;/// True while the LLM engine is paying its first-run cold-start
+/// cost (shader compile + KV-cache prefill, 10-30 s on Mali/Adreno
+/// GPUs). Drives the home page's "Preparing AI engine…" overlay.
+ bool get engineWarming;
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
 @JsonKey(includeFromJson: false, includeToJson: false)
@@ -26,21 +29,21 @@ $AssistantStateCopyWith<AssistantState> get copyWith => _$AssistantStateCopyWith
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'AssistantState'))
-    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio))..add(DiagnosticsProperty('intakeOpen', intakeOpen))..add(DiagnosticsProperty('intakeText', intakeText))..add(DiagnosticsProperty('intakeHasPhoto', intakeHasPhoto))..add(DiagnosticsProperty('intakeHasAudio', intakeHasAudio))..add(DiagnosticsProperty('thinkingForReport', thinkingForReport))..add(DiagnosticsProperty('intakeImagePreview', intakeImagePreview))..add(DiagnosticsProperty('languageCode', languageCode));
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio))..add(DiagnosticsProperty('intakeOpen', intakeOpen))..add(DiagnosticsProperty('intakeText', intakeText))..add(DiagnosticsProperty('intakeHasPhoto', intakeHasPhoto))..add(DiagnosticsProperty('intakeHasAudio', intakeHasAudio))..add(DiagnosticsProperty('thinkingForReport', thinkingForReport))..add(DiagnosticsProperty('intakeImagePreview', intakeImagePreview))..add(DiagnosticsProperty('languageCode', languageCode))..add(DiagnosticsProperty('engineWarming', engineWarming));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio)&&(identical(other.intakeOpen, intakeOpen) || other.intakeOpen == intakeOpen)&&(identical(other.intakeText, intakeText) || other.intakeText == intakeText)&&(identical(other.intakeHasPhoto, intakeHasPhoto) || other.intakeHasPhoto == intakeHasPhoto)&&(identical(other.intakeHasAudio, intakeHasAudio) || other.intakeHasAudio == intakeHasAudio)&&(identical(other.thinkingForReport, thinkingForReport) || other.thinkingForReport == thinkingForReport)&&const DeepCollectionEquality().equals(other.intakeImagePreview, intakeImagePreview)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other.turns, turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio)&&(identical(other.intakeOpen, intakeOpen) || other.intakeOpen == intakeOpen)&&(identical(other.intakeText, intakeText) || other.intakeText == intakeText)&&(identical(other.intakeHasPhoto, intakeHasPhoto) || other.intakeHasPhoto == intakeHasPhoto)&&(identical(other.intakeHasAudio, intakeHasAudio) || other.intakeHasAudio == intakeHasAudio)&&(identical(other.thinkingForReport, thinkingForReport) || other.thinkingForReport == thinkingForReport)&&const DeepCollectionEquality().equals(other.intakeImagePreview, intakeImagePreview)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode)&&(identical(other.engineWarming, engineWarming) || other.engineWarming == engineWarming));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio),intakeOpen,intakeText,intakeHasPhoto,intakeHasAudio,thinkingForReport,const DeepCollectionEquality().hash(intakeImagePreview),languageCode);
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio),intakeOpen,intakeText,intakeHasPhoto,intakeHasAudio,thinkingForReport,const DeepCollectionEquality().hash(intakeImagePreview),languageCode,engineWarming);
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio, intakeOpen: $intakeOpen, intakeText: $intakeText, intakeHasPhoto: $intakeHasPhoto, intakeHasAudio: $intakeHasAudio, thinkingForReport: $thinkingForReport, intakeImagePreview: $intakeImagePreview, languageCode: $languageCode)';
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio, intakeOpen: $intakeOpen, intakeText: $intakeText, intakeHasPhoto: $intakeHasPhoto, intakeHasAudio: $intakeHasAudio, thinkingForReport: $thinkingForReport, intakeImagePreview: $intakeImagePreview, languageCode: $languageCode, engineWarming: $engineWarming)';
 }
 
 
@@ -51,7 +54,7 @@ abstract mixin class $AssistantStateCopyWith<$Res>  {
   factory $AssistantStateCopyWith(AssistantState value, $Res Function(AssistantState) _then) = _$AssistantStateCopyWithImpl;
 @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio, bool intakeOpen, String intakeText, bool intakeHasPhoto, bool intakeHasAudio, bool thinkingForReport, Uint8List? intakeImagePreview, String? languageCode
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio, bool intakeOpen, String intakeText, bool intakeHasPhoto, bool intakeHasAudio, bool thinkingForReport, Uint8List? intakeImagePreview, String? languageCode, bool engineWarming
 });
 
 
@@ -68,7 +71,7 @@ class _$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,Object? intakeOpen = null,Object? intakeText = null,Object? intakeHasPhoto = null,Object? intakeHasAudio = null,Object? thinkingForReport = null,Object? intakeImagePreview = freezed,Object? languageCode = freezed,}) {
+@pragma('vm:prefer-inline') @override $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,Object? intakeOpen = null,Object? intakeText = null,Object? intakeHasPhoto = null,Object? intakeHasAudio = null,Object? thinkingForReport = null,Object? intakeImagePreview = freezed,Object? languageCode = freezed,Object? engineWarming = null,}) {
   return _then(_self.copyWith(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
@@ -86,7 +89,8 @@ as bool,intakeHasAudio: null == intakeHasAudio ? _self.intakeHasAudio : intakeHa
 as bool,thinkingForReport: null == thinkingForReport ? _self.thinkingForReport : thinkingForReport // ignore: cast_nullable_to_non_nullable
 as bool,intakeImagePreview: freezed == intakeImagePreview ? _self.intakeImagePreview : intakeImagePreview // ignore: cast_nullable_to_non_nullable
 as Uint8List?,languageCode: freezed == languageCode ? _self.languageCode : languageCode // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,engineWarming: null == engineWarming ? _self.engineWarming : engineWarming // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 
@@ -171,10 +175,10 @@ return $default(_that);case _:
 /// }
 /// ```
 
-@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode)?  $default,{required TResult orElse(),}) {final _that = this;
+@optionalTypeArgs TResult maybeWhen<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode,  bool engineWarming)?  $default,{required TResult orElse(),}) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode,_that.engineWarming);case _:
   return orElse();
 
 }
@@ -192,10 +196,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 /// }
 /// ```
 
-@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode)  $default,) {final _that = this;
+@optionalTypeArgs TResult when<TResult extends Object?>(TResult Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode,  bool engineWarming)  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState():
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode,_that.engineWarming);case _:
   throw StateError('Unexpected subclass');
 
 }
@@ -212,10 +216,10 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 /// }
 /// ```
 
-@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode)?  $default,) {final _that = this;
+@optionalTypeArgs TResult? whenOrNull<TResult extends Object?>(TResult? Function( AssistantStage stage,  String transcript,  String response,  List<ConversationTurn> turns,  bool surfaceReady,  String thinkingTrace,  String? errorMessage,  Uint8List? pendingUserImage,  Uint8List? pendingUserAudio,  bool intakeOpen,  String intakeText,  bool intakeHasPhoto,  bool intakeHasAudio,  bool thinkingForReport,  Uint8List? intakeImagePreview,  String? languageCode,  bool engineWarming)?  $default,) {final _that = this;
 switch (_that) {
 case _AssistantState() when $default != null:
-return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode);case _:
+return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.surfaceReady,_that.thinkingTrace,_that.errorMessage,_that.pendingUserImage,_that.pendingUserAudio,_that.intakeOpen,_that.intakeText,_that.intakeHasPhoto,_that.intakeHasAudio,_that.thinkingForReport,_that.intakeImagePreview,_that.languageCode,_that.engineWarming);case _:
   return null;
 
 }
@@ -227,7 +231,7 @@ return $default(_that.stage,_that.transcript,_that.response,_that.turns,_that.su
 
 
 class _AssistantState extends AssistantState with DiagnosticableTreeMixin {
-  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.surfaceReady = false, this.thinkingTrace = '', this.errorMessage, this.pendingUserImage, this.pendingUserAudio, this.intakeOpen = false, this.intakeText = '', this.intakeHasPhoto = false, this.intakeHasAudio = false, this.thinkingForReport = false, this.intakeImagePreview, this.languageCode}): _turns = turns,super._();
+  const _AssistantState({this.stage = AssistantStage.idle, this.transcript = '', this.response = '', final  List<ConversationTurn> turns = const <ConversationTurn>[], this.surfaceReady = false, this.thinkingTrace = '', this.errorMessage, this.pendingUserImage, this.pendingUserAudio, this.intakeOpen = false, this.intakeText = '', this.intakeHasPhoto = false, this.intakeHasAudio = false, this.thinkingForReport = false, this.intakeImagePreview, this.languageCode, this.engineWarming = false}): _turns = turns,super._();
   
 
 @override@JsonKey() final  AssistantStage stage;
@@ -252,6 +256,10 @@ class _AssistantState extends AssistantState with DiagnosticableTreeMixin {
 @override@JsonKey() final  bool thinkingForReport;
 @override final  Uint8List? intakeImagePreview;
 @override final  String? languageCode;
+/// True while the LLM engine is paying its first-run cold-start
+/// cost (shader compile + KV-cache prefill, 10-30 s on Mali/Adreno
+/// GPUs). Drives the home page's "Preparing AI engine…" overlay.
+@override@JsonKey() final  bool engineWarming;
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
@@ -264,21 +272,21 @@ _$AssistantStateCopyWith<_AssistantState> get copyWith => __$AssistantStateCopyW
 void debugFillProperties(DiagnosticPropertiesBuilder properties) {
   properties
     ..add(DiagnosticsProperty('type', 'AssistantState'))
-    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio))..add(DiagnosticsProperty('intakeOpen', intakeOpen))..add(DiagnosticsProperty('intakeText', intakeText))..add(DiagnosticsProperty('intakeHasPhoto', intakeHasPhoto))..add(DiagnosticsProperty('intakeHasAudio', intakeHasAudio))..add(DiagnosticsProperty('thinkingForReport', thinkingForReport))..add(DiagnosticsProperty('intakeImagePreview', intakeImagePreview))..add(DiagnosticsProperty('languageCode', languageCode));
+    ..add(DiagnosticsProperty('stage', stage))..add(DiagnosticsProperty('transcript', transcript))..add(DiagnosticsProperty('response', response))..add(DiagnosticsProperty('turns', turns))..add(DiagnosticsProperty('surfaceReady', surfaceReady))..add(DiagnosticsProperty('thinkingTrace', thinkingTrace))..add(DiagnosticsProperty('errorMessage', errorMessage))..add(DiagnosticsProperty('pendingUserImage', pendingUserImage))..add(DiagnosticsProperty('pendingUserAudio', pendingUserAudio))..add(DiagnosticsProperty('intakeOpen', intakeOpen))..add(DiagnosticsProperty('intakeText', intakeText))..add(DiagnosticsProperty('intakeHasPhoto', intakeHasPhoto))..add(DiagnosticsProperty('intakeHasAudio', intakeHasAudio))..add(DiagnosticsProperty('thinkingForReport', thinkingForReport))..add(DiagnosticsProperty('intakeImagePreview', intakeImagePreview))..add(DiagnosticsProperty('languageCode', languageCode))..add(DiagnosticsProperty('engineWarming', engineWarming));
 }
 
 @override
 bool operator ==(Object other) {
-  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio)&&(identical(other.intakeOpen, intakeOpen) || other.intakeOpen == intakeOpen)&&(identical(other.intakeText, intakeText) || other.intakeText == intakeText)&&(identical(other.intakeHasPhoto, intakeHasPhoto) || other.intakeHasPhoto == intakeHasPhoto)&&(identical(other.intakeHasAudio, intakeHasAudio) || other.intakeHasAudio == intakeHasAudio)&&(identical(other.thinkingForReport, thinkingForReport) || other.thinkingForReport == thinkingForReport)&&const DeepCollectionEquality().equals(other.intakeImagePreview, intakeImagePreview)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode));
+  return identical(this, other) || (other.runtimeType == runtimeType&&other is _AssistantState&&(identical(other.stage, stage) || other.stage == stage)&&(identical(other.transcript, transcript) || other.transcript == transcript)&&(identical(other.response, response) || other.response == response)&&const DeepCollectionEquality().equals(other._turns, _turns)&&(identical(other.surfaceReady, surfaceReady) || other.surfaceReady == surfaceReady)&&(identical(other.thinkingTrace, thinkingTrace) || other.thinkingTrace == thinkingTrace)&&(identical(other.errorMessage, errorMessage) || other.errorMessage == errorMessage)&&const DeepCollectionEquality().equals(other.pendingUserImage, pendingUserImage)&&const DeepCollectionEquality().equals(other.pendingUserAudio, pendingUserAudio)&&(identical(other.intakeOpen, intakeOpen) || other.intakeOpen == intakeOpen)&&(identical(other.intakeText, intakeText) || other.intakeText == intakeText)&&(identical(other.intakeHasPhoto, intakeHasPhoto) || other.intakeHasPhoto == intakeHasPhoto)&&(identical(other.intakeHasAudio, intakeHasAudio) || other.intakeHasAudio == intakeHasAudio)&&(identical(other.thinkingForReport, thinkingForReport) || other.thinkingForReport == thinkingForReport)&&const DeepCollectionEquality().equals(other.intakeImagePreview, intakeImagePreview)&&(identical(other.languageCode, languageCode) || other.languageCode == languageCode)&&(identical(other.engineWarming, engineWarming) || other.engineWarming == engineWarming));
 }
 
 
 @override
-int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio),intakeOpen,intakeText,intakeHasPhoto,intakeHasAudio,thinkingForReport,const DeepCollectionEquality().hash(intakeImagePreview),languageCode);
+int get hashCode => Object.hash(runtimeType,stage,transcript,response,const DeepCollectionEquality().hash(_turns),surfaceReady,thinkingTrace,errorMessage,const DeepCollectionEquality().hash(pendingUserImage),const DeepCollectionEquality().hash(pendingUserAudio),intakeOpen,intakeText,intakeHasPhoto,intakeHasAudio,thinkingForReport,const DeepCollectionEquality().hash(intakeImagePreview),languageCode,engineWarming);
 
 @override
 String toString({ DiagnosticLevel minLevel = DiagnosticLevel.info }) {
-  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio, intakeOpen: $intakeOpen, intakeText: $intakeText, intakeHasPhoto: $intakeHasPhoto, intakeHasAudio: $intakeHasAudio, thinkingForReport: $thinkingForReport, intakeImagePreview: $intakeImagePreview, languageCode: $languageCode)';
+  return 'AssistantState(stage: $stage, transcript: $transcript, response: $response, turns: $turns, surfaceReady: $surfaceReady, thinkingTrace: $thinkingTrace, errorMessage: $errorMessage, pendingUserImage: $pendingUserImage, pendingUserAudio: $pendingUserAudio, intakeOpen: $intakeOpen, intakeText: $intakeText, intakeHasPhoto: $intakeHasPhoto, intakeHasAudio: $intakeHasAudio, thinkingForReport: $thinkingForReport, intakeImagePreview: $intakeImagePreview, languageCode: $languageCode, engineWarming: $engineWarming)';
 }
 
 
@@ -289,7 +297,7 @@ abstract mixin class _$AssistantStateCopyWith<$Res> implements $AssistantStateCo
   factory _$AssistantStateCopyWith(_AssistantState value, $Res Function(_AssistantState) _then) = __$AssistantStateCopyWithImpl;
 @override @useResult
 $Res call({
- AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio, bool intakeOpen, String intakeText, bool intakeHasPhoto, bool intakeHasAudio, bool thinkingForReport, Uint8List? intakeImagePreview, String? languageCode
+ AssistantStage stage, String transcript, String response, List<ConversationTurn> turns, bool surfaceReady, String thinkingTrace, String? errorMessage, Uint8List? pendingUserImage, Uint8List? pendingUserAudio, bool intakeOpen, String intakeText, bool intakeHasPhoto, bool intakeHasAudio, bool thinkingForReport, Uint8List? intakeImagePreview, String? languageCode, bool engineWarming
 });
 
 
@@ -306,7 +314,7 @@ class __$AssistantStateCopyWithImpl<$Res>
 
 /// Create a copy of AssistantState
 /// with the given fields replaced by the non-null parameter values.
-@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,Object? intakeOpen = null,Object? intakeText = null,Object? intakeHasPhoto = null,Object? intakeHasAudio = null,Object? thinkingForReport = null,Object? intakeImagePreview = freezed,Object? languageCode = freezed,}) {
+@override @pragma('vm:prefer-inline') $Res call({Object? stage = null,Object? transcript = null,Object? response = null,Object? turns = null,Object? surfaceReady = null,Object? thinkingTrace = null,Object? errorMessage = freezed,Object? pendingUserImage = freezed,Object? pendingUserAudio = freezed,Object? intakeOpen = null,Object? intakeText = null,Object? intakeHasPhoto = null,Object? intakeHasAudio = null,Object? thinkingForReport = null,Object? intakeImagePreview = freezed,Object? languageCode = freezed,Object? engineWarming = null,}) {
   return _then(_AssistantState(
 stage: null == stage ? _self.stage : stage // ignore: cast_nullable_to_non_nullable
 as AssistantStage,transcript: null == transcript ? _self.transcript : transcript // ignore: cast_nullable_to_non_nullable
@@ -324,7 +332,8 @@ as bool,intakeHasAudio: null == intakeHasAudio ? _self.intakeHasAudio : intakeHa
 as bool,thinkingForReport: null == thinkingForReport ? _self.thinkingForReport : thinkingForReport // ignore: cast_nullable_to_non_nullable
 as bool,intakeImagePreview: freezed == intakeImagePreview ? _self.intakeImagePreview : intakeImagePreview // ignore: cast_nullable_to_non_nullable
 as Uint8List?,languageCode: freezed == languageCode ? _self.languageCode : languageCode // ignore: cast_nullable_to_non_nullable
-as String?,
+as String?,engineWarming: null == engineWarming ? _self.engineWarming : engineWarming // ignore: cast_nullable_to_non_nullable
+as bool,
   ));
 }
 

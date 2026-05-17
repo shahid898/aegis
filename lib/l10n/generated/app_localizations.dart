@@ -572,6 +572,12 @@ abstract class AppLocalizations {
   /// **'Something went wrong.'**
   String get homeSomethingWentWrong;
 
+  /// No description provided for @homeEnginePreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing AI engine — first time takes about 30 seconds. You can start talking; the first reply may be slow.'**
+  String get homeEnginePreparing;
+
   /// No description provided for @homeNoEmergencyContact.
   ///
   /// In en, this message translates to:

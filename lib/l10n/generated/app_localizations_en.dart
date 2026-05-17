@@ -278,6 +278,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get homeSomethingWentWrong => 'Something went wrong.';
 
   @override
+  String get homeEnginePreparing =>
+      'Preparing AI engine — first time takes about 30 seconds. You can start talking; the first reply may be slow.';
+
+  @override
   String get homeNoEmergencyContact =>
       'No emergency contact saved. Add one in settings.';
 

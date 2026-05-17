@@ -144,6 +144,7 @@
   "homeSave": "Save",
   "homeVoiceDegraded": "Voice models are not installed. You can still use SOS.",
   "homeSomethingWentWrong": "Something went wrong.",
+  "homeEnginePreparing": "Preparing AI engine — first time takes about 30 seconds. You can start talking; the first reply may be slow.",
   "homeNoEmergencyContact": "No emergency contact saved. Add one in settings.",
   "homeCouldNotDial": "Could not open dialer for {phone}.",
   "@homeCouldNotDial": {

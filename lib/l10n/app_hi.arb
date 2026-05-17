@@ -89,6 +89,7 @@
   "homeSave": "सहेजें",
   "homeVoiceDegraded": "आवाज़ मॉडल इंस्टॉल नहीं। SOS अब भी उपलब्ध।",
   "homeSomethingWentWrong": "कुछ गलत हुआ।",
+  "homeEnginePreparing": "AI इंजन तैयार हो रहा है — पहली बार लगभग 30 सेकंड लगते हैं। आप बात शुरू कर सकते हैं; पहला उत्तर धीमा हो सकता है।",
   "homeNoEmergencyContact": "कोई आपातकालीन संपर्क सहेजा नहीं। सेटिंग्स में जोड़ें।",
   "homeCouldNotDial": "{phone} के लिए डायलर नहीं खोला जा सका।",
 

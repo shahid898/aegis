@@ -201,10 +201,17 @@ class ModelPackRepository {
         // stays smooth on a 1-2 GB extract. Streaming I/O via
         // InputFileStream/OutputFileStream keeps peak RAM at one
         // OutputFileStream buffer (~64 KB) instead of the whole tar.
-        await Isolate.run(() => _extractTarBz2Streaming(
-              stagingFile.path,
-              targetRoot.path,
-            ));
+        //
+        // The call goes through `_runExtractInIsolate` (static) instead
+        // of `Isolate.run(() => ...)` inline because Dart copies the
+        // closure's *entire* enclosing lexical scope, not just the
+        // names it references. `install()` has a StreamController and a
+        // Future in scope; both are unsendable and cause
+        //   Invalid argument(s): Illegal argument in isolate message:
+        //   object is unsendable - Library:'dart:async' Class: _Future
+        // when serializing the closure. Routing through a static method
+        // shrinks the captured context to two `String`s, both sendable.
+        await _runExtractInIsolate(stagingFile.path, targetRoot.path);
       } else {
         await _installDirectFile(pack, stagingFile);
       }
@@ -300,6 +307,17 @@ class ModelPackRepository {
     final digest = await sha256.bind(f.openRead()).first;
     return digest.toString();
   }
+
+  /// Static helper that wraps [Isolate.run] so its closure captures
+  /// only the two `String` arguments below — not the entire lexical
+  /// scope of [install], which contains a StreamController + Future
+  /// that are unsendable across isolates. See call site for the full
+  /// rationale.
+  static Future<void> _runExtractInIsolate(
+    String archivePath,
+    String targetPath,
+  ) =>
+      Isolate.run(() => _extractTarBz2Streaming(archivePath, targetPath));
 }
 
 /// Streaming tar.bz2 extractor. Runs inside [Isolate.run] so the

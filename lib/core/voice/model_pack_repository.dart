@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
 
@@ -67,7 +69,7 @@ class MissingHfTokenException implements Exception {
 /// HuggingFace personal access token, baked in at build time via
 /// `--dart-define=HF_TOKEN=hf_xxx`. Empty by default so anonymous
 /// downloads continue to work for non-gated packs.
-const String _hfTokenFromEnv = "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";
+const String _hfTokenFromEnv = String.fromEnvironment('HF_TOKEN');
 
 /// Downloads a model pack archive, verifies it, and extracts it on disk.
 ///
@@ -75,6 +77,13 @@ const String _hfTokenFromEnv = "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";
 /// app being backgrounded / process kill (Android WorkManager +
 /// foreground service, iOS URLSession background queue). Also picks up
 /// after flaky-network drops via HTTP Range when the origin supports it.
+///
+/// Single-stream `DownloadTask` (not `ParallelDownloadTask`): HF's CDN
+/// (`cdn-lfs.huggingface.co`) saturates one TCP pipe better than four
+/// chunked Range requests, especially on mobile networks where extra
+/// connections inflate packet loss and trigger 429 retry storms. The
+/// previous 4-chunk parallel task wall-clocked at 10-15 min for the
+/// 2.5 GB Gemma artifact; single-stream hits 2-4 min on the same link.
 class ModelPackRepository {
   ModelPackRepository(this._registry) : _downloader = FileDownloader();
 
@@ -87,7 +96,6 @@ class ModelPackRepository {
   /// Download + install [pack]. Emits progress events; returns when the
   /// pack is extracted and marked installed. Throws on any failure.
   Stream<ModelDownloadProgress> install(VoiceModelPack pack) async* {
-    // Short-circuit if already installed.
     if (await _registry.isInstalled(pack)) {
       yield ModelDownloadProgress(
         pack: pack,
@@ -103,33 +111,21 @@ class ModelPackRepository {
     final stagingFilename = stagingFile.uri.pathSegments.last;
     final headers = _authHeadersFor(pack);
 
-    // Parallel chunked download: 4 concurrent HTTP Range requests
-    // against the same origin. HuggingFace's resolve URL redirects to
-    // S3 which honors Range — typical wall-clock gain is 2-4× over a
-    // single-stream Dio download. Trade-off: ParallelDownloadTask
-    // cannot pause/resume on failure (the chunk plan is in-memory only
-    // and cancellation cascades to every chunk). Retries still work —
-    // the whole task retries from scratch up to `retries` times — so
-    // transient drops auto-recover, just from byte 0 of the failed
-    // chunk's range, not the file. Cancel still works the same way.
-    final task = ParallelDownloadTask(
+    // Single-stream download. HuggingFace + Cloudfront serve one TCP
+    // connection at near-line-rate; parallel chunks against the same
+    // origin hurt more than they help on mobile networks. Pause/resume
+    // works (the plugin records partial bytes and sends a `Range:` on
+    // retry), so transient drops don't restart the whole file.
+    final task = DownloadTask(
       taskId: 'aegis-pack-${pack.id}',
       url: pack.archiveUrl,
       filename: stagingFilename,
-      chunks: 4,
-      // Absolute path. We resolve `${registryRoot}/.staging/` via
-      // baseDirectory.root and a literal directory string so the
-      // plugin can find the same staging file across launches without
-      // recomputing app-support paths (which can differ between cold
-      // and warm starts on some Android skins).
       baseDirectory: BaseDirectory.root,
       directory: stagingDir,
       headers: headers ?? const <String, String>{},
       retries: 5,
+      allowPause: true,
       updates: Updates.statusAndProgress,
-      // Surface to the OS so a backgrounded download keeps a system
-      // notification visible (Android requires this for long-running
-      // foreground services).
       displayName: 'Aegis model · ${pack.id}',
     );
 
@@ -138,9 +134,6 @@ class ModelPackRepository {
 
     void emitProgress(double fraction) {
       if (controller.isClosed) return;
-      // background_downloader's `onProgress` reports 0.0..1.0. We
-      // scale by the catalog's expected byte count so the UI can show
-      // "523 / 1842 MB" without depending on Content-Length.
       final total = pack.approxBytes;
       final received = (fraction.clamp(0.0, 1.0) * total).round();
       controller.add(ModelDownloadProgress(
@@ -161,8 +154,6 @@ class ModelPackRepository {
 
       final result = await downloadFuture;
       if (result.status == TaskStatus.canceled) {
-        // Cubit-initiated cancel — bubble up as a typed exception so
-        // upstream can distinguish "user canceled" from "network died".
         throw _DownloadCanceledException(pack.id);
       }
       if (result.status != TaskStatus.complete) {
@@ -172,7 +163,6 @@ class ModelPackRepository {
         );
       }
 
-      // ---- Phase 2: verify ----------------------------------------------
       if (!await stagingFile.exists()) {
         throw StateError(
           'Downloaded file for ${pack.id} disappeared from staging '
@@ -180,16 +170,17 @@ class ModelPackRepository {
           'eviction. Free up storage and retry.',
         );
       }
-      final stagedBytes = await stagingFile.length();
-      yield ModelDownloadProgress(
-        pack: pack,
-        phase: ModelDownloadPhase.verifying,
-        receivedBytes: stagedBytes,
-        totalBytes: stagedBytes,
-      );
 
+      // ---- Phase 2: verify ----------------------------------------------
       final expected = pack.archiveSha256.trim().toLowerCase();
       if (expected.isNotEmpty) {
+        final stagedBytes = await stagingFile.length();
+        yield ModelDownloadProgress(
+          pack: pack,
+          phase: ModelDownloadPhase.verifying,
+          receivedBytes: stagedBytes,
+          totalBytes: stagedBytes,
+        );
         final actual = await _sha256OfFile(stagingFile);
         if (actual != expected) {
           throw ModelIntegrityException(pack.id, expected, actual);
@@ -205,7 +196,15 @@ class ModelPackRepository {
       );
 
       if (pack.isArchive) {
-        await _extractTarBz2(stagingFile, await _registry.root());
+        final targetRoot = await _registry.root();
+        // Off-load bz2+tar decode to a background isolate so the UI
+        // stays smooth on a 1-2 GB extract. Streaming I/O via
+        // InputFileStream/OutputFileStream keeps peak RAM at one
+        // OutputFileStream buffer (~64 KB) instead of the whole tar.
+        await Isolate.run(() => _extractTarBz2Streaming(
+              stagingFile.path,
+              targetRoot.path,
+            ));
       } else {
         await _installDirectFile(pack, stagingFile);
       }
@@ -247,13 +246,6 @@ class ModelPackRepository {
     if (taskId == null) return false;
     return _downloader.cancelTaskWithId(taskId);
   }
-
-  // NB: pause/resume removed. We use [ParallelDownloadTask] for the
-  // 2-4× speed-up, and the plugin doesn't support pause on parallel
-  // downloads (the chunk plan is in-memory only). Cancel + retry are
-  // the only flow-control levers. If pause/resume becomes a hard
-  // product requirement later, switch back to plain [DownloadTask]
-  // with `allowPause: true` and eat the single-stream throughput.
 
   /// Temporary download location, kept inside the registry root so the
   /// post-download `rename()` stays atomic on the same filesystem.
@@ -308,22 +300,62 @@ class ModelPackRepository {
     final digest = await sha256.bind(f.openRead()).first;
     return digest.toString();
   }
+}
 
-  Future<void> _extractTarBz2(File archiveFile, Directory target) async {
-    final compressed = await archiveFile.readAsBytes();
-    final tarBytes = BZip2Decoder().decodeBytes(compressed);
-    final archive = TarDecoder().decodeBytes(tarBytes);
+/// Streaming tar.bz2 extractor. Runs inside [Isolate.run] so the
+/// UI isolate stays interactive while a multi-GB archive decompresses
+/// on slow ARM cores. Top-level (not a class method) because
+/// `Isolate.run` requires a sendable closure.
+///
+/// Implementation notes:
+///  - bz2 is decompressed *to a temp .tar file* with [BZip2Decoder.decodeStream]
+///    so we never hold the decompressed tar bytes in RAM. The previous
+///    `BZip2Decoder().decodeBytes(await file.readAsBytes())` path
+///    allocated the entire compressed bz2 AND the decompressed tar in
+///    RAM simultaneously — easily 1+ GB on a phone, which is the
+///    other half of the "10-15 min" slowness (OOM kills + swap thrash).
+///  - tar is then decoded via [TarDecoder.decodeStream] (lazy, file-
+///    backed) and entries are written one at a time with
+///    [OutputFileStream], same pattern as `extractArchiveToDisk`.
+Future<void> _extractTarBz2Streaming(
+  String archivePath,
+  String targetPath,
+) async {
+  final tarPath = '$archivePath.tar';
 
+  final bzIn = InputFileStream(archivePath);
+  final tarOut = OutputFileStream(tarPath);
+  try {
+    BZip2Decoder().decodeStream(bzIn, tarOut);
+  } finally {
+    await bzIn.close();
+    await tarOut.close();
+  }
+
+  final tarIn = InputFileStream(tarPath);
+  try {
+    final archive = TarDecoder().decodeStream(tarIn);
     for (final entry in archive) {
-      final outPath = '${target.path}/${entry.name}';
+      final outPath = '$targetPath/${entry.name}';
       if (entry.isFile) {
-        final data = entry.content as List<int>;
         final outFile = File(outPath);
-        await outFile.create(recursive: true);
-        await outFile.writeAsBytes(data);
+        await outFile.parent.create(recursive: true);
+        final out = OutputFileStream(outPath);
+        try {
+          entry.writeContent(out);
+        } finally {
+          await out.close();
+        }
       } else {
         await Directory(outPath).create(recursive: true);
       }
+    }
+  } finally {
+    await tarIn.close();
+    try {
+      await File(tarPath).delete();
+    } on FileSystemException {
+      // Best-effort cleanup.
     }
   }
 }

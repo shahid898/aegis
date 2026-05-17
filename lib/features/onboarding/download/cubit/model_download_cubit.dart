@@ -186,9 +186,10 @@ class ModelDownloadCubit extends Cubit<ModelDownloadState> {
     emit(state.copyWith(status: DownloadStatus.cancelled));
   }
 
-  // NB: pause/resume removed — parallel chunked downloads (4 streams
-  // via HTTP Range) cannot be paused mid-flight. Cancel + restart is
-  // the only flow-control. Speed trade-off: ~2-4× faster overall.
+  // NB: pause/resume not surfaced in UI yet. The repository now uses
+  // single-stream DownloadTask which supports pause via the plugin,
+  // but onboarding flow only exposes cancel; wire pause/resume into
+  // ModelDownloadState if/when product asks for it.
 
   /// Skip downloads entirely. App will run in degraded mode (no voice).
   /// Caller navigates away — this just marks the state so the UI can

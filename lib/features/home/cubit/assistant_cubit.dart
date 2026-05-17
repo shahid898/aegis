@@ -468,13 +468,20 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
 
       _voiceReady = true;
-      emit(state.copyWith(stage: AssistantStage.idle, engineWarming: true));
-      // Pay the cold-start tax now while the user is staring at the
-      // home screen with nothing to do, instead of on their first
-      // question. Native GPU shader compile + first KV-cache prefill
-      // is 10-30s on Mali/Adreno; the UI shows a "Preparing AI
-      // engine…" hint until this completes.
-      unawaited(_warmEngine());
+      // Boot-time engine warm-up disabled. `LlmService.warmUp` runs a
+      // text-only decode at maxTokens=1024 to pre-pay the GPU shader
+      // compile + KV-cache prefill cost — but it settles the cached
+      // engine handle into a text-only GPU state. The first triage
+      // turn with an image then reuses that handle, hits the vision
+      // encoder on a text-warmed OpenCL context, and crashes mid-
+      // decode on Mali (`Conversation closed` straight after
+      // `RunDecodeAsync`, followed by `clEnqueueWriteBuffer` /
+      // `DYNAMIC_UPDATE_SLICE` on retry's engine_create). The
+      // `model_download_speedup` branch — same prompt, same image,
+      // same flutter_gemma — ships vision successfully on this
+      // hardware precisely because it has no warmUp. First triage /
+      // alert pays the ~10s cold-start tax here instead.
+      emit(state.copyWith(stage: AssistantStage.idle));
     } on Object catch (e) {
       emit(
         state.copyWith(
@@ -485,25 +492,10 @@ class AssistantCubit extends Cubit<AssistantState> {
     }
   }
 
-  Future<void> _warmEngine() async {
-    final stopwatch = Stopwatch()..start();
-    try {
-      await _llm.warmUp();
-      if (kDebugMode) {
-        debugPrint(
-          '[Aegis][Cubit] engine warm-up done in ${stopwatch.elapsedMilliseconds}ms',
-        );
-      }
-    } on Object catch (e) {
-      if (kDebugMode) {
-        debugPrint('[Aegis][Cubit] engine warm-up failed (non-fatal): $e');
-      }
-    } finally {
-      if (!isClosed) {
-        emit(state.copyWith(engineWarming: false));
-      }
-    }
-  }
+  // `_warmEngine` (boot-time `LlmService.warmUp` wrapper) intentionally
+  // removed — see note at boot setup above. Triage with image on a
+  // text-warmed engine crashes mid-decode on Mali. Do not re-add
+  // without first moving triage to its own engine instance.
 
   Future<void> toggleConversation() async {
     // Intake voice capture is its own flow (no full conversation

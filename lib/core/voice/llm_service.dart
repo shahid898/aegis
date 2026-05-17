@@ -1028,7 +1028,14 @@ class LlmService {
       }
       final parsed = _parseToolResponse(response);
       if (parsed == null) return null;
-      return _finaliseReport(parsed, capturedAt: capturedAt, gps: groundGps);
+      return _finaliseReport(
+        parsed,
+        capturedAt: capturedAt,
+        gps: groundGps,
+        hasImage: hasImage,
+        hasAudio: input.hasAudio,
+        hasUserText: input.userText.trim().isNotEmpty,
+      );
     } finally {
       try {
         await chat.close();
@@ -1047,6 +1054,9 @@ class LlmService {
     TriageReport r, {
     required String capturedAt,
     required String gps,
+    required bool hasImage,
+    required bool hasAudio,
+    required bool hasUserText,
   }) {
     // Filter action items, dropping JSON-fragment leakage that the
     // raw-fallback parser sometimes captures when Gemma 4's
@@ -1124,15 +1134,78 @@ class LlmService {
     final cleanedSummary =
         trimTrailingGarbage(stripDegenerateTail(r.summary));
 
+    // CASUALTY CLAMP. The tight system prompt no longer carries the
+    // verbose "CASUALTY DEFAULT: 0 reported unless visible body / user
+    // statement" rule (it pushed `sys` past the 1024-token prefill
+    // slot and crashed vision on Mali). Enforce the same guarantee
+    // here in Dart so the model can't quietly inflate
+    // `casualty_count` from "estimated based on collapse footprint"
+    // when no actual casualty signal is present.
+    //
+    // A casualty count is only kept when paired with a status that
+    // implies a real person event:
+    //   ALIVE_INJURED, ALIVE_TRAPPED, MISSING, DECEASED.
+    // Statuses `ALIVE_SAFE` / `ALIVE_UNKNOWN` / `null` zero the count
+    // out — the model can flag the status without committing to a
+    // number.
+    String? clampedCasualtyStatus = r.casualtyStatus;
+    int? clampedCasualtyCount = r.casualtyCount;
+    String? clampedCasualtyColor = r.casualtyTriageColor;
+    const realCasualtyStatuses = <String>{
+      'ALIVE_INJURED',
+      'ALIVE_TRAPPED',
+      'MISSING',
+      'DECEASED',
+    };
+    final statusUpper = clampedCasualtyStatus?.trim().toUpperCase();
+    final isRealCasualty =
+        statusUpper != null && realCasualtyStatuses.contains(statusUpper);
+    if (!isRealCasualty) {
+      clampedCasualtyCount = null;
+      clampedCasualtyColor = null;
+      if (kDebugMode &&
+          (r.casualtyCount != null || r.casualtyTriageColor != null)) {
+        debugPrint(
+          '[Aegis][LLM] casualty clamp: dropped count=${r.casualtyCount} '
+          'color=${r.casualtyTriageColor} (status=${r.casualtyStatus ?? "null"})',
+        );
+      }
+    }
+
+    // THIN-EVIDENCE OVERRIDE. When the input was effectively empty
+    // (no image fed to the model, no audio, no user text) the model
+    // still loves to fabricate a HIGH severity body section. Force
+    // INFO + "Insufficient evidence" summary so the responder card
+    // matches reality and so downstream alert routing doesn't escalate
+    // on nothing.
+    final thinEvidence = !hasImage && !hasAudio && !hasUserText;
+    final finalSeverity =
+        thinEvidence ? 'INFO' : normaliseSeverity(r.severity);
+    final finalSummary = thinEvidence
+        ? 'Insufficient evidence to grade.'
+        : (cleanedSummary.isEmpty
+            ? _deriveSummary(cleanedBody)
+            : cleanedSummary);
+    if (thinEvidence) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] thin-evidence override: severity=INFO, '
+          'casualty fields zeroed (hasImage=$hasImage hasAudio=$hasAudio '
+          'hasUserText=$hasUserText)',
+        );
+      }
+      clampedCasualtyStatus = null;
+      clampedCasualtyCount = null;
+      clampedCasualtyColor = null;
+    }
+
     return TriageReport(
       format: r.format,
       title: cleanedTitle.isEmpty
           ? _deriveTitle(r.hazardType, cleanedBody)
           : cleanedTitle,
-      severity: normaliseSeverity(r.severity),
-      summary: cleanedSummary.isEmpty
-          ? _deriveSummary(cleanedBody)
-          : cleanedSummary,
+      severity: finalSeverity,
+      summary: finalSummary,
       body: cleanedBody,
       immediateActions: cleanedActions,
       // OVERRIDE: ground truth from device, not model.
@@ -1144,9 +1217,9 @@ class LlmService {
       damageDescription: r.damageDescription == null
           ? null
           : trimTrailingGarbage(stripDegenerateTail(r.damageDescription!)),
-      casualtyStatus: r.casualtyStatus,
-      casualtyCount: r.casualtyCount,
-      casualtyTriageColor: r.casualtyTriageColor,
+      casualtyStatus: clampedCasualtyStatus,
+      casualtyCount: clampedCasualtyCount,
+      casualtyTriageColor: clampedCasualtyColor,
       // OVERRIDE: GPS comes from device sensor, not model.
       gps: gps.isEmpty ? null : gps,
       recommendedSkill: r.recommendedSkill,
@@ -1470,36 +1543,33 @@ class LlmService {
     final speakRule =
         langName == null ? 'Reply in the user\'s language.' : 'Reply in $langName.';
 
-    // Tight system prompt. Tool schema carries all field rules; the
-    // jinja-rendered tool declaration is already paying for the
-    // OpenAI-Chat-Completions overhead — we keep this prompt under ~700
-    // tokens so prefill + image patches stay tractable on Mali GPU.
     // Tight system prompt. Tool schema carries field shape; this
     // prompt carries DECISION rules (observe / infer / hedge) that
     // the schema can't express. Target ~250 tokens after chat-template
     // overhead so the bundle's `prefill_1024` ceiling has headroom
-    // even after the tool jinja-render (~400-500 tokens). Earlier
-    // version was double this size, hit DYNAMIC_UPDATE_SLICE on chunk
-    // 2 because the KV cache slot allocator was sized for 1024 tokens.
+    // even after the tool jinja-render (~400-500 tokens) AND the image
+    // patches (~2376 / 2520 budget on a 384x216 photo). The verbose
+    // CASUALTY DEFAULT / STRUCTURE INFERENCE / thin-evidence variant
+    // pushed `sys=1322c` and consistently crashed inside
+    // `clEnqueueWriteBuffer` + `DYNAMIC_UPDATE_SLICE` (node 12) on
+    // Mali because the combined prefill blew past the 1024-token slot
+    // allocator. The model_download_speedup branch ships this same
+    // prompt at `sys=880c` and successfully generates a multimodal
+    // report on identical hardware — see commit
+    // `b7a7cc1 system prompt update`. Do NOT re-bloat without first
+    // shrinking the tool schema; the two budgets are shared.
     return '''
 You are Aegis offline triage. $speakRule
 
 Call `render_triage_report` ONCE per turn. No prose. No extra tool calls.
 
 Decision rules:
-1. OBSERVE — only count people, vehicles, structures, hazards you
-   can actually SEE in the image or HEAR named in the audio/text.
-2. CASUALTY DEFAULT: "0 reported" unless visible bodies / visible
-   injured persons / explicit user statement ("3 trapped",
-   "two hurt"). Do NOT estimate casualty counts from collapse
-   footprint, damaged-roof area, or vehicle damage. Empty / unclear
-   scene = "0 reported", NOT "~2 estimated".
-3. STRUCTURE INFERENCE allowed: damage scale / HAZUS category /
-   construction type can be inferred from visible damage with a
-   hedge. People counts cannot.
-4. If evidence is too thin to score (empty audio, blurry image,
-   no user text), emit severity=INFO + summary="Insufficient
-   evidence" and zero counts. Do not invent.
+1. OBSERVE — count visible: structures, hazards, responders, weather,
+   light, debris.
+2. INFER — when implied but not directly visible, hedge:
+   "approximately", "likely", "~5 estimated", "based on collapse
+   footprint". Use ranges ("3-5"), not bare zeros.
+3. REPORT — "0 reported" only when scene truly shows zero.
 
 Never write GPS, lat/lng, timestamps — app injects them. Never emit
 [INFERRED] / [UNKNOWN] / bracketed placeholders. Write a real value

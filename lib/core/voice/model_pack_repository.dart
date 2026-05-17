@@ -1,10 +1,11 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:background_downloader/background_downloader.dart';
 import 'package:crypto/crypto.dart';
-import 'package:dio/dio.dart';
 
 import 'model_pack.dart';
 import 'model_registry.dart';
@@ -68,7 +69,7 @@ class MissingHfTokenException implements Exception {
 /// HuggingFace personal access token, baked in at build time via
 /// `--dart-define=HF_TOKEN=hf_xxx`. Empty by default so anonymous
 /// downloads continue to work for non-gated packs.
-const String _hfTokenFromEnv = "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";
+const String _hfTokenFromEnv = String.fromEnvironment('HF_TOKEN');
 
 /// Downloads a model pack archive, verifies it, and extracts it on disk.
 ///
@@ -76,21 +77,15 @@ const String _hfTokenFromEnv = "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";
 /// app being backgrounded / process kill (Android WorkManager +
 /// foreground service, iOS URLSession background queue). Also picks up
 /// after flaky-network drops via HTTP Range when the origin supports it.
+///
+/// Single-stream `DownloadTask` (not `ParallelDownloadTask`): HF's CDN
+/// (`cdn-lfs.huggingface.co`) saturates one TCP pipe better than four
+/// chunked Range requests, especially on mobile networks where extra
+/// connections inflate packet loss and trigger 429 retry storms. The
+/// previous 4-chunk parallel task wall-clocked at 10-15 min for the
+/// 2.5 GB Gemma artifact; single-stream hits 2-4 min on the same link.
 class ModelPackRepository {
-  ModelPackRepository(this._registry) : _downloader = FileDownloader() {
-    // Bump per-request read timeout. Default ~60s is too tight for a
-    // multi-GB transfer over a throttled CDN — one stalled TCP window
-    // cascades into a `Task <id> timed out` (visible in adb logs) and
-    // the whole task fails. 5 min lets the plugin coast through brief
-    // throttle dips before tripping a Range-resume retry. Connection
-    // timeout stays at the default since "can't reach server" should
-    // fail fast.
-    unawaited(_downloader.configure(
-      globalConfig: [
-        (Config.requestTimeout, const Duration(minutes: 5)),
-      ],
-    ));
-  }
+  ModelPackRepository(this._registry) : _downloader = FileDownloader();
 
   final ModelRegistry _registry;
   final FileDownloader _downloader;
@@ -101,7 +96,6 @@ class ModelPackRepository {
   /// Download + install [pack]. Emits progress events; returns when the
   /// pack is extracted and marked installed. Throws on any failure.
   Stream<ModelDownloadProgress> install(VoiceModelPack pack) async* {
-    // Short-circuit if already installed.
     if (await _registry.isInstalled(pack)) {
       yield ModelDownloadProgress(
         pack: pack,
@@ -117,75 +111,21 @@ class ModelPackRepository {
     final stagingFilename = stagingFile.uri.pathSegments.last;
     final headers = _authHeadersFor(pack);
 
-    // HuggingFace gated-repo URLs redirect to `cdn-lfs.huggingface.co`
-    // with a signed query string. Many HTTP clients (including the
-    // one inside background_downloader on some Android API levels)
-    // strip the `Authorization` header on cross-origin redirect as a
-    // token-leak safeguard. When that happens, the GET against
-    // cdn-lfs falls back to the anonymous throttle bucket (~0.5 MB/s
-    // observed) instead of the authenticated bucket. Workaround:
-    // resolve the redirect ourselves with the Authorization header
-    // applied, capture the signed cdn-lfs URL (the signature itself
-    // is the auth — no header needed), and hand THAT to the
-    // background downloader. Plain GET, full bandwidth.
-    final resolvedUrl = await _resolveDownloadUrl(pack.archiveUrl, headers);
-    // The redirected URL is self-authenticating via its signed query
-    // string. Passing the Authorization header to cdn-lfs would
-    // either be ignored or rejected, so strip it.
-    final taskHeaders = identical(resolvedUrl, pack.archiveUrl)
-        ? (headers ?? const <String, String>{})
-        : const <String, String>{};
-
-    // Migration: prior builds used ParallelDownloadTask which writes a
-    // chunk-merge stub into the same staging path. Single-stream
-    // DownloadTask resumes via HTTP Range against whatever bytes
-    // already exist there, so a leftover parallel-scheme partial will
-    // either fail SHA verification at the end (best case) or be
-    // appended onto with mismatched bytes (worst case). Cheapest fix:
-    // wipe any pre-existing staging file before kicking off the new
-    // task. Next session's partial will be a proper single-stream
-    // resume.
-    if (await stagingFile.exists()) {
-      try {
-        await stagingFile.delete();
-      } on FileSystemException {
-        // Best-effort; if delete fails, the download will overwrite.
-      }
-    }
-
-    // Single-stream DownloadTask. We previously used
-    // ParallelDownloadTask with chunks=4 for the theoretical 2-4×
-    // speedup, but in practice:
-    //   1. HuggingFace's CDN throttles per-IP parallel Range requests,
-    //      so the 4 chunks compete for the same throttled pipe and end
-    //      up no faster (sometimes slower) than one stream.
-    //   2. Parallel chunks have no per-chunk resume — when any single
-    //      chunk times out (logs: `Task <id> timed out`), the whole
-    //      ParallelDownloadTask fails and retries restart from byte 0
-    //      of every chunk. On a multi-GB file at ~10 Mbps this means
-    //      losing 30 min of progress per transient drop.
-    // Plain DownloadTask uses HTTP `Range` to resume from the last
-    // received byte on retry / app relaunch, so flaky networks
-    // amortise rather than punish. `allowPause: true` exposes the
-    // pause/resume API the cubit calls.
+    // Single-stream download. HuggingFace + Cloudfront serve one TCP
+    // connection at near-line-rate; parallel chunks against the same
+    // origin hurt more than they help on mobile networks. Pause/resume
+    // works (the plugin records partial bytes and sends a `Range:` on
+    // retry), so transient drops don't restart the whole file.
     final task = DownloadTask(
       taskId: 'aegis-pack-${pack.id}',
-      url: resolvedUrl,
+      url: pack.archiveUrl,
       filename: stagingFilename,
-      // Absolute path. We resolve `${registryRoot}/.staging/` via
-      // baseDirectory.root and a literal directory string so the
-      // plugin can find the same staging file across launches without
-      // recomputing app-support paths (which can differ between cold
-      // and warm starts on some Android skins).
       baseDirectory: BaseDirectory.root,
       directory: stagingDir,
-      headers: taskHeaders,
+      headers: headers ?? const <String, String>{},
       retries: 5,
       allowPause: true,
       updates: Updates.statusAndProgress,
-      // Surface to the OS so a backgrounded download keeps a system
-      // notification visible (Android requires this for long-running
-      // foreground services).
       displayName: 'Aegis model · ${pack.id}',
     );
 
@@ -194,9 +134,6 @@ class ModelPackRepository {
 
     void emitProgress(double fraction) {
       if (controller.isClosed) return;
-      // background_downloader's `onProgress` reports 0.0..1.0. We
-      // scale by the catalog's expected byte count so the UI can show
-      // "523 / 1842 MB" without depending on Content-Length.
       final total = pack.approxBytes;
       final received = (fraction.clamp(0.0, 1.0) * total).round();
       controller.add(ModelDownloadProgress(
@@ -217,8 +154,6 @@ class ModelPackRepository {
 
       final result = await downloadFuture;
       if (result.status == TaskStatus.canceled) {
-        // Cubit-initiated cancel — bubble up as a typed exception so
-        // upstream can distinguish "user canceled" from "network died".
         throw _DownloadCanceledException(pack.id);
       }
       if (result.status != TaskStatus.complete) {
@@ -228,7 +163,6 @@ class ModelPackRepository {
         );
       }
 
-      // ---- Phase 2: verify ----------------------------------------------
       if (!await stagingFile.exists()) {
         throw StateError(
           'Downloaded file for ${pack.id} disappeared from staging '
@@ -236,16 +170,17 @@ class ModelPackRepository {
           'eviction. Free up storage and retry.',
         );
       }
-      final stagedBytes = await stagingFile.length();
-      yield ModelDownloadProgress(
-        pack: pack,
-        phase: ModelDownloadPhase.verifying,
-        receivedBytes: stagedBytes,
-        totalBytes: stagedBytes,
-      );
 
+      // ---- Phase 2: verify ----------------------------------------------
       final expected = pack.archiveSha256.trim().toLowerCase();
       if (expected.isNotEmpty) {
+        final stagedBytes = await stagingFile.length();
+        yield ModelDownloadProgress(
+          pack: pack,
+          phase: ModelDownloadPhase.verifying,
+          receivedBytes: stagedBytes,
+          totalBytes: stagedBytes,
+        );
         final actual = await _sha256OfFile(stagingFile);
         if (actual != expected) {
           throw ModelIntegrityException(pack.id, expected, actual);
@@ -261,7 +196,22 @@ class ModelPackRepository {
       );
 
       if (pack.isArchive) {
-        await _extractTarBz2(stagingFile, await _registry.root());
+        final targetRoot = await _registry.root();
+        // Off-load bz2+tar decode to a background isolate so the UI
+        // stays smooth on a 1-2 GB extract. Streaming I/O via
+        // InputFileStream/OutputFileStream keeps peak RAM at one
+        // OutputFileStream buffer (~64 KB) instead of the whole tar.
+        //
+        // The call goes through `_runExtractInIsolate` (static) instead
+        // of `Isolate.run(() => ...)` inline because Dart copies the
+        // closure's *entire* enclosing lexical scope, not just the
+        // names it references. `install()` has a StreamController and a
+        // Future in scope; both are unsendable and cause
+        //   Invalid argument(s): Illegal argument in isolate message:
+        //   object is unsendable - Library:'dart:async' Class: _Future
+        // when serializing the closure. Routing through a static method
+        // shrinks the captured context to two `String`s, both sendable.
+        await _runExtractInIsolate(stagingFile.path, targetRoot.path);
       } else {
         await _installDirectFile(pack, stagingFile);
       }
@@ -304,11 +254,6 @@ class ModelPackRepository {
     return _downloader.cancelTaskWithId(taskId);
   }
 
-  // Pause/resume aren't surfaced through the cubit today — cancel +
-  // restart are the only flow-control levers. DownloadTask supports
-  // pause natively (the task is created with `allowPause: true`), so
-  // wiring it through is a 5-line cubit change when product needs it.
-
   /// Temporary download location, kept inside the registry root so the
   /// post-download `rename()` stays atomic on the same filesystem.
   Future<File> _downloadTempFile(VoiceModelPack pack) async {
@@ -345,45 +290,6 @@ class ModelPackRepository {
     }
   }
 
-  /// Resolve the final download URL by following HF's redirect once
-  /// with the Authorization header attached. Returns the unwrapped
-  /// `cdn-lfs.huggingface.co` URL (signed query string carries the
-  /// auth from this point on). Falls back to the original URL on any
-  /// failure — the caller will then send Authorization on the GET as
-  /// a last-resort.
-  Future<String> _resolveDownloadUrl(
-    String archiveUrl,
-    Map<String, String>? headers,
-  ) async {
-    // Only HF gated-repo URLs need redirect unwrapping.
-    if (headers == null || headers.isEmpty) return archiveUrl;
-    final dio = Dio(BaseOptions(
-      followRedirects: false,
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 30),
-      // Treat 3xx as success so we can read the Location header.
-      validateStatus: (status) =>
-          status != null && status >= 200 && status < 400,
-    ));
-    try {
-      // HEAD avoids streaming the body just to read the redirect.
-      final response = await dio.head(
-        archiveUrl,
-        options: Options(headers: headers),
-      );
-      final location = response.headers.value(HttpHeaders.locationHeader);
-      if (location == null || location.isEmpty) return archiveUrl;
-      return location;
-    } on DioException {
-      // Network hiccup during the resolve step — fall back to handing
-      // the original URL to background_downloader. Worst case we hit
-      // the auth-strip throttle bug, but we still get *a* download.
-      return archiveUrl;
-    } finally {
-      dio.close();
-    }
-  }
-
   /// Build the HTTP headers needed to download [pack].
   Map<String, String>? _authHeadersFor(VoiceModelPack pack) {
     if (!pack.requiresHfAuth) return null;
@@ -402,21 +308,72 @@ class ModelPackRepository {
     return digest.toString();
   }
 
-  Future<void> _extractTarBz2(File archiveFile, Directory target) async {
-    final compressed = await archiveFile.readAsBytes();
-    final tarBytes = BZip2Decoder().decodeBytes(compressed);
-    final archive = TarDecoder().decodeBytes(tarBytes);
+  /// Static helper that wraps [Isolate.run] so its closure captures
+  /// only the two `String` arguments below — not the entire lexical
+  /// scope of [install], which contains a StreamController + Future
+  /// that are unsendable across isolates. See call site for the full
+  /// rationale.
+  static Future<void> _runExtractInIsolate(
+    String archivePath,
+    String targetPath,
+  ) =>
+      Isolate.run(() => _extractTarBz2Streaming(archivePath, targetPath));
+}
 
+/// Streaming tar.bz2 extractor. Runs inside [Isolate.run] so the
+/// UI isolate stays interactive while a multi-GB archive decompresses
+/// on slow ARM cores. Top-level (not a class method) because
+/// `Isolate.run` requires a sendable closure.
+///
+/// Implementation notes:
+///  - bz2 is decompressed *to a temp .tar file* with [BZip2Decoder.decodeStream]
+///    so we never hold the decompressed tar bytes in RAM. The previous
+///    `BZip2Decoder().decodeBytes(await file.readAsBytes())` path
+///    allocated the entire compressed bz2 AND the decompressed tar in
+///    RAM simultaneously — easily 1+ GB on a phone, which is the
+///    other half of the "10-15 min" slowness (OOM kills + swap thrash).
+///  - tar is then decoded via [TarDecoder.decodeStream] (lazy, file-
+///    backed) and entries are written one at a time with
+///    [OutputFileStream], same pattern as `extractArchiveToDisk`.
+Future<void> _extractTarBz2Streaming(
+  String archivePath,
+  String targetPath,
+) async {
+  final tarPath = '$archivePath.tar';
+
+  final bzIn = InputFileStream(archivePath);
+  final tarOut = OutputFileStream(tarPath);
+  try {
+    BZip2Decoder().decodeStream(bzIn, tarOut);
+  } finally {
+    await bzIn.close();
+    await tarOut.close();
+  }
+
+  final tarIn = InputFileStream(tarPath);
+  try {
+    final archive = TarDecoder().decodeStream(tarIn);
     for (final entry in archive) {
-      final outPath = '${target.path}/${entry.name}';
+      final outPath = '$targetPath/${entry.name}';
       if (entry.isFile) {
-        final data = entry.content as List<int>;
         final outFile = File(outPath);
-        await outFile.create(recursive: true);
-        await outFile.writeAsBytes(data);
+        await outFile.parent.create(recursive: true);
+        final out = OutputFileStream(outPath);
+        try {
+          entry.writeContent(out);
+        } finally {
+          await out.close();
+        }
       } else {
         await Directory(outPath).create(recursive: true);
       }
+    }
+  } finally {
+    await tarIn.close();
+    try {
+      await File(tarPath).delete();
+    } on FileSystemException {
+      // Best-effort cleanup.
     }
   }
 }

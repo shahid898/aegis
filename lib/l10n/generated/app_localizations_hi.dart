@@ -155,7 +155,7 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get downloadFirstInstallNote =>
-      'पहली बार इंस्टॉल में 10–15 मिनट लगते हैं अच्छे कनेक्शन पर। डाउनलोड बैकग्राउंड में जारी रहेगा — स्क्रीन लॉक कर सकते हैं, पर बेहतर गति के लिए Wi-Fi पर रहें।';
+      'पहली बार इंस्टॉल में 5–10 मिनट लगते हैं अच्छे कनेक्शन पर। डाउनलोड बैकग्राउंड में जारी रहेगा — स्क्रीन लॉक कर सकते हैं, पर बेहतर गति के लिए Wi-Fi पर रहें।';
 
   @override
   String get downloadAllRequired =>

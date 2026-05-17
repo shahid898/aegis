@@ -154,7 +154,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get downloadFirstInstallNote =>
-      'First install takes 10–15 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.';
+      'First install takes 5–10 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.';
 
   @override
   String get downloadAllRequired =>

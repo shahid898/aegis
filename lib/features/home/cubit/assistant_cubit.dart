@@ -16,6 +16,7 @@ import '../../../core/places/place.dart';
 import '../../../core/places/places_repository.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
+import '../../../core/voice/listening_cue_player.dart';
 import '../../../core/voice/llm_service.dart';
 import '../../../core/voice/model_catalog.dart';
 import '../../../core/voice/model_pack.dart';
@@ -248,6 +249,9 @@ class AssistantCubit extends Cubit<AssistantState> {
   final LlmService _llm;
   final TtsService _tts;
   final ReportsRepository _reports;
+  // Asset-backed mic-open / mic-close cues. Replaces the prior
+  // `SystemSound.click` calls — see `assets/sound/`.
+  final ListeningCuePlayer _cues = ListeningCuePlayer();
   final String _countryCode;
   final Duration _autoConfirmTimeout;
 
@@ -531,12 +535,12 @@ class AssistantCubit extends Cubit<AssistantState> {
     // either alone is easy to miss under stress:
     //   * HapticFeedback.mediumImpact — tactile thump, works even when
     //     the device is on silent (which an emergency user may have).
-    //   * SystemSound.click — short audible click via the OS; respects
-    //     ringer volume and avoids shipping a custom asset.
+    //   * `ListeningCuePlayer.playStart` — branded mic-on chime
+    //     (`assets/sound/listening_start.mp3`); respects ringer volume.
     // Both are best-effort: failures (e.g. emulator without vibrator)
     // silently fall through so the conversation loop still runs.
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(SystemSound.play(SystemSoundType.click));
+    unawaited(_cues.playStart());
     // Preserve any briefing bubble already rendered in [turns] so the
     // user can keep reading the alert summary while asking follow-ups.
     // Only clear in-flight transcript / response — those belong to a
@@ -772,7 +776,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     // long conversation keeps audible feedback when the mic flips
     // hot between turns.
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(SystemSound.play(SystemSoundType.click));
+    unawaited(_cues.playStart());
 
     emit(state.copyWith(
       stage: AssistantStage.listening,
@@ -847,9 +851,10 @@ class AssistantCubit extends Cubit<AssistantState> {
     } on Object {
       // best-effort
     }
-    // Listening-stopped cue.
+    // Listening-stopped cue
+    // (`assets/sound/listening_end_sound.mp3`).
     unawaited(HapticFeedback.lightImpact());
-    unawaited(SystemSound.play(SystemSoundType.click));
+    unawaited(_cues.playStop());
     return captured;
   }
 
@@ -1331,9 +1336,10 @@ class AssistantCubit extends Cubit<AssistantState> {
       return;
     }
 
-    // Listening cue: tactile + system click so user knows mic is hot.
+    // Listening cue: tactile + branded chime so user knows mic is hot
+    // (`assets/sound/listening_start.mp3`).
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(SystemSound.play(SystemSoundType.click));
+    unawaited(_cues.playStart());
 
     emit(state.copyWith(stage: AssistantStage.listening));
 
@@ -1371,11 +1377,12 @@ class AssistantCubit extends Cubit<AssistantState> {
       if (state.stage == AssistantStage.listening) {
         emit(state.copyWith(stage: AssistantStage.idle));
       }
-      // Capture-complete cue: short click + light haptic so user
+      // Capture-complete cue: branded chime + light haptic so user
       // hears the recording closed even when there's no transcript
       // to render (silent / failed capture).
+      // (`assets/sound/listening_end_sound.mp3`).
       unawaited(HapticFeedback.lightImpact());
-      unawaited(SystemSound.play(SystemSoundType.click));
+      unawaited(_cues.playStop());
     }
 
     if (wav == null || wav.isEmpty) {
@@ -1609,6 +1616,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     _lifecycleListener?.dispose();
     _lifecycleListener = null;
     await _recorder.dispose();
+    await _cues.dispose();
     return super.close();
   }
 }

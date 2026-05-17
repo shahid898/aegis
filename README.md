@@ -53,18 +53,32 @@ The project ships with `fvm` config — the system Flutter on most machines is t
 ```bash
 fvm flutter pub get
 fvm dart run build_runner build --delete-conflicting-outputs
-fvm flutter run -d <device-id>
+fvm flutter run -d <device-id> --dart-define=HF_TOKEN=hf_xxxxxxxxxxxx
 ```
 
-First launch downloads the model packs (Gemma 4 IT `.litertlm`, Piper voices, Silero VAD) plus seeds the offline place database + map tiles for the region you pick. Budget **10-15 minutes** on a typical mobile connection (faster on Wi-Fi, longer on flaky 4G). After that everything works offline.
+`HF_TOKEN` is your Hugging Face read-only access token
+(generate at <https://huggingface.co/settings/tokens>). It is required
+for the first-launch model download from the gated `litert-community`
+Hugging Face repos — without it, `ModelPackRepository.install` aborts
+with a 401 and surfaces a clear UI error.
+
+First launch downloads the model packs (Gemma 4 IT `.litertlm`, Piper voices, Silero VAD) plus seeds the offline place database + map tiles for the region you pick. Budget **5-10 minutes** on a typical mobile connection (faster on Wi-Fi, longer on flaky 4G). After that everything works offline.
 
 ### Release build
 
 ```bash
 fvm flutter build apk --release \
   --obfuscate \
-  --split-debug-info=./debug-info/
+  --split-debug-info=./debug-info/ \
+  --dart-define=HF_TOKEN=hf_xxxxxxxxxxxx
 ```
+
+The `--dart-define=HF_TOKEN=…` flag is required for any build that has
+to fetch model packs at first launch. The token is compiled into the
+binary via `String.fromEnvironment('HF_TOKEN')` (see
+`lib/core/voice/model_pack_repository.dart`); do **not** commit your
+token. Use a CI secret + `--dart-define-from-file` in production
+release pipelines.
 
 ProGuard rules cover the LiteRT-LM JNI and ObjectBox generated classes; obfuscation is safe.
 
@@ -249,13 +263,13 @@ Covering all six in one binary collapses what would otherwise be a chat-model + 
 
 | Asset | Size | Notes |
 |---|---|---|
-| Gemma 4 E2B IT (`.litertlm`) | ~3.4 GB | One model serves chat + ASR + vision + tools |
+| Gemma 4 E2B IT (`.litertlm`) | ~2.59 GB | One model serves chat + ASR + vision + tools |
 | Piper TTS voices | ~10-50 MB each | One per language |
 | Silero VAD | ~2 MB | |
 | sqflite places.db | ~1-3 MB | ~3 k POIs per 25 km bbox |
 | FMTC tile store | ~30 MB | CARTO Voyager, zoom 11-16 |
 
-Total per region: roughly **3.5 GB** including model.
+Total per region: roughly **2.7 GB** including model.
 
 ---
 

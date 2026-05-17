@@ -353,7 +353,7 @@ abstract class AppLocalizations {
   /// No description provided for @downloadFirstInstallNote.
   ///
   /// In en, this message translates to:
-  /// **'First install takes 10–15 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.'**
+  /// **'First install takes 5–10 minutes on a good connection. The download continues in the background — you can lock the screen, but stay on Wi-Fi for best speed.'**
   String get downloadFirstInstallNote;
 
   /// No description provided for @downloadAllRequired.

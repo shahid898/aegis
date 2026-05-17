@@ -160,6 +160,10 @@ flutter:
   assets:
     - assets/languages/
     - assets/geo/
+    # Listening start / stop cues (mp3) played by the assistant cubit
+    # in place of the OS click. Loaded once via `just_audio` and
+    # replayed on every mic-open / mic-close transition.
+    - assets/sound/
     # Agent Skills registry. Each subdirectory is one skill; the
     # SKILL.md frontmatter is concatenated into Gemma 4's system
     # prompt as a discoverable capabilities catalog. Adding a new

@@ -1296,10 +1296,10 @@ const List<_SimPreset> _presets = [
   _SimPreset(
     label: 'Cyclone (escalate)',
     icon: Icons.cyclone,
-    sender: 'IMD',
+    sender: 'NDMA',
     body:
-        'Cyclone Biparjoy approaching Mumbai coast. Evacuate to designated '
-        'shelters NOW. — IMD',
+        'Cyclone Biparjoy approaching Mumbai coast. Evacuate to designated shelters. Stay indoors '
+        'Follow local instructions. - NDMA',
     severity: AlertSeverity.critical,
   ),
   _SimPreset(

@@ -154,6 +154,23 @@ dev_dependencies:
   freezed: ^3.2.5
   json_serializable: ^6.13.1
   hive_ce_generator: ^1.11.1
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 24
+  remove_alpha_ios: true
+  background_color_ios: "#064E27"
+  adaptive_icon_background: "#F4B942"
+  adaptive_icon_foreground: "assets/icon/app_icon_foreground.png"
+  web:
+    generate: false
+  windows:
+    generate: false
+  macos:
+    generate: false
 
 flutter:
   uses-material-design: true

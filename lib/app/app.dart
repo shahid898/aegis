@@ -40,18 +40,21 @@ class AegisApp extends StatelessWidget {
           ],
           // Many of our 140 catalog languages aren't in
           // GlobalMaterialLocalizations / AppLocalizations. For any
-          // unsupported code, fall back to English (matches
-          // AppLocalizations' generated supportedLocales — currently
-          // en + hi; rest of the 140 fall through to en until their
-          // ARBs ship).
+          // unsupported code, fall back to English. The `supported`
+          // callback arg is the full 140-locale MaterialApp list,
+          // which matches codes (e.g. `es`) that have NO ARB file —
+          // returning that locale crashes `AppLocalizations.of(...)!`
+          // because the delegate fails to load. Match against
+          // `AppLocalizations.supportedLocales` (the generated list
+          // of locales that actually have ARBs — currently en + hi)
+          // instead, so unsupported picks resolve to en cleanly.
           localeResolutionCallback: (deviceLocale, supported) {
-            if (locale != null) {
-              for (final s in supported) {
-                if (s.languageCode == locale.languageCode) return s;
-              }
-              return const Locale('en');
+            final target = locale ?? deviceLocale;
+            if (target == null) return const Locale('en');
+            for (final s in AppLocalizations.supportedLocales) {
+              if (s.languageCode == target.languageCode) return s;
             }
-            return null;
+            return const Locale('en');
           },
         );
       },

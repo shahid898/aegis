@@ -404,6 +404,25 @@ final Tool _renderMapViewTool = const Tool(
 /// `<|tool>declaration:…<tool|>` tokens for the model, and parses the
 /// `<|tool_call>…<tool_call|>` response back into a structured
 /// [FunctionCallResponse]. No Dart-side prompt engineering.
+
+/// Thrown by [LlmService.generateReport] when a Mali GPU vision-decode
+/// crash poisons the process-wide OpenCL context. The only way to
+/// recover is to force-stop the Android process so the OS rebuilds the
+/// CL context from scratch — Dart-side rebuild + retry consistently
+/// hits the same `clEnqueueWriteBuffer` / `DYNAMIC_UPDATE_SLICE` chain.
+/// Cubit catches it and surfaces a "force-stop + reopen" hint instead
+/// of letting the user wait on a guaranteed-to-fail retry.
+class EngineWedgedException implements Exception {
+  const EngineWedgedException();
+
+  @override
+  String toString() =>
+      'EngineWedgedException: GPU OpenCL context is in a bad state. '
+      'Force-stop and reopen Aegis to recover.';
+}
+
+typedef _EngineWedgedException = EngineWedgedException;
+
 class LlmService {
   LlmService(
     this._registry, {
@@ -813,7 +832,28 @@ class LlmService {
     try {
       return await _generateReportOnce(input, maxTokens: maxTokens);
     } on Object catch (e) {
+      final visionWasEnabled = !_visionDisabled;
       if (await _shouldFallbackToCpu(e)) {
+        // Vision-corruption short-circuit. When `_shouldFallbackToCpu`
+        // just flipped `_visionDisabled` from false→true, the GPU
+        // delegate dumped a `convert_tensor_buffer` /
+        // `clEnqueueWriteBuffer` / `STABLEHLO_COMPOSITE` failure during
+        // vision decode. That signature means the OpenCL context is
+        // poisoned process-wide — every retry we've seen rebuilds the
+        // engine on the still-poisoned handle in ~1.5 s and fails with
+        // the same `clEnqueueWriteBuffer` + `DYNAMIC_UPDATE_SLICE`
+        // signature. Skip the doomed retry and surface the
+        // restart-required error immediately so the user isn't waiting
+        // an extra minute on a guaranteed-to-fail rebuild.
+        if (visionWasEnabled && _visionDisabled) {
+          if (kDebugMode) {
+            debugPrint(
+              '[Aegis][LLM] vision corruption — OpenCL context '
+              'poisoned; skipping retry, surfacing wedged error',
+            );
+          }
+          throw const _EngineWedgedException();
+        }
         return _generateReportOnce(input, maxTokens: maxTokens);
       }
       if (await _shouldFallbackToSmallerContext(e, maxTokens)) {
@@ -2654,6 +2694,12 @@ match-mesh-beacon (missing person).
         debugPrintStack(stackTrace: st, label: '[Aegis][LLM] _ensureModel stack');
       }
       completer.completeError(e, st);
+      // Absorb the completer's error if nothing is awaiting `_loadFuture`.
+      // The `rethrow` below already surfaces the failure to the primary
+      // caller; without this catch, the completer's future becomes an
+      // unhandled async error and Dart prints two extra
+      // "Unhandled Exception" stacks on every Mali GPU-poisoned retry.
+      unawaited(completer.future.catchError((Object _) {}));
       _loadFuture = null;
       rethrow;
     }

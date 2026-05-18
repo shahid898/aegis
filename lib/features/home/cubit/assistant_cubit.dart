@@ -252,6 +252,25 @@ class AssistantCubit extends Cubit<AssistantState> {
   // Asset-backed mic-open / mic-close cues. Replaces the prior
   // `SystemSound.click` calls — see `assets/sound/`.
   final ListeningCuePlayer _cues = ListeningCuePlayer();
+
+  /// Set true while a triage request is in flight (from `submitIntake`
+  /// → `_respondTo` → `_runTriage` → back). Cue chime helpers (see
+  /// [_cueStart] / [_cueStop]) silently no-op while this is set so a
+  /// `just_audio` decode + AudioTrack flush can't race the native
+  /// vision encoder for Mali GPU buffers — observed contention pattern
+  /// triggers `Failed to upload data to GPU (clEnqueueWriteBuffer)`
+  /// mid-decode and wedges the OpenCL context process-wide.
+  bool _triageInFlight = false;
+
+  void _cueStart() {
+    if (_triageInFlight) return;
+    unawaited(_cues.playStart());
+  }
+
+  void _cueStop() {
+    if (_triageInFlight) return;
+    unawaited(_cues.playStop());
+  }
   final String _countryCode;
   final Duration _autoConfirmTimeout;
 
@@ -532,7 +551,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     // Both are best-effort: failures (e.g. emulator without vibrator)
     // silently fall through so the conversation loop still runs.
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(_cues.playStart());
+    _cueStart();
     // Preserve any briefing bubble already rendered in [turns] so the
     // user can keep reading the alert summary while asking follow-ups.
     // Only clear in-flight transcript / response — those belong to a
@@ -768,7 +787,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     // long conversation keeps audible feedback when the mic flips
     // hot between turns.
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(_cues.playStart());
+    _cueStart();
 
     emit(state.copyWith(
       stage: AssistantStage.listening,
@@ -846,7 +865,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     // Listening-stopped cue
     // (`assets/sound/listening_end_sound.mp3`).
     unawaited(HapticFeedback.lightImpact());
-    unawaited(_cues.playStop());
+    _cueStop();
     return captured;
   }
 
@@ -1161,12 +1180,23 @@ class AssistantCubit extends Cubit<AssistantState> {
       );
     }
 
-    // Optional spoken summary while the card mounts.
-    final spoken = report?.spokenSummary?.trim() ?? '';
-    final assistantText = spoken.isNotEmpty
-        ? spoken
-        : (report?.summary.trim() ?? 'Triage report ready.');
-    if (spoken.isNotEmpty) {
+    // Spoken summary while the card mounts. The tight system prompt
+    // we ship after the Mali vision fix omits the `spoken_summary`
+    // tool field on most turns (`argKeys=[body, format, hazard_type,
+    // hazus_category, severity, summary, title]`), which used to leave
+    // the TTS path silent — user saw the card but heard nothing. Fall
+    // back to the on-card `summary` (always present) so the responder
+    // still gets the audible cue while their eyes are still on the
+    // scene.
+    final rawSpoken = report?.spokenSummary?.trim() ?? '';
+    final fallbackSummary = report?.summary.trim() ?? '';
+    final spoken = rawSpoken.isNotEmpty
+        ? rawSpoken
+        : (fallbackSummary.isNotEmpty
+            ? fallbackSummary
+            : 'Triage report ready.');
+    final assistantText = spoken;
+    if (report != null && spoken.isNotEmpty) {
       emit(state.copyWith(stage: AssistantStage.speaking));
       try {
         await _tts.enqueue(spoken);
@@ -1331,7 +1361,7 @@ class AssistantCubit extends Cubit<AssistantState> {
     // Listening cue: tactile + branded chime so user knows mic is hot
     // (`assets/sound/listening_start.mp3`).
     unawaited(HapticFeedback.mediumImpact());
-    unawaited(_cues.playStart());
+    _cueStart();
 
     emit(state.copyWith(stage: AssistantStage.listening));
 
@@ -1374,7 +1404,7 @@ class AssistantCubit extends Cubit<AssistantState> {
       // to render (silent / failed capture).
       // (`assets/sound/listening_end_sound.mp3`).
       unawaited(HapticFeedback.lightImpact());
-      unawaited(_cues.playStop());
+      _cueStop();
     }
 
     if (wav == null || wav.isEmpty) {
@@ -1422,6 +1452,27 @@ class AssistantCubit extends Cubit<AssistantState> {
       );
       return;
     }
+
+    // Cancel any still-running intake audio capture BEFORE we hand off
+    // to the LLM. The native triage prefill is GPU-heavy (vision
+    // encoder pumps ~2400 patches through Mali's OpenCL pipeline) and
+    // a concurrent flutter_sound + MediaCodec audio capture has been
+    // observed to compete for GPU buffer space — manifesting as
+    // `Failed to upload data to GPU (clEnqueueWriteBuffer)` mid-decode
+    // followed by an unrecoverable engine wedge. Wait briefly for the
+    // recorder shutdown to land so the codec releases its buffers
+    // before vision prefill starts.
+    if (_intakeAudioActive) {
+      _intakeAudioCancel?.complete();
+      // Bounded wait — the recorder normally tears down in <200 ms.
+      // If it lingers, surface anyway; the underlying race is rare.
+      final waitStart = DateTime.now();
+      while (_intakeAudioActive &&
+          DateTime.now().difference(waitStart).inMilliseconds < 600) {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      }
+    }
+
     final llmUserText = text.isEmpty ? '(see attached evidence)' : text;
     emit(state.copyWith(
       intakeOpen: false,
@@ -1431,15 +1482,26 @@ class AssistantCubit extends Cubit<AssistantState> {
       pendingUserAudio: _pendingAudioWav,
     ));
     _conversationActive = true;
-    await _respondTo(
-      llmUserText,
-      useTriagePath: true,
-      intakeImage: _pendingImageJpeg,
-      intakeAudioWav: _pendingAudioWav,
-    );
-    _conversationActive = false;
-    _pendingImageJpeg = null;
-    _pendingAudioWav = null;
+    // Suppress mic-open / mic-close chimes for the entire triage
+    // submit → respond → wedge-or-done window. `just_audio` decoding
+    // the chime through MediaCodec while the Mali vision encoder is
+    // pumping ~2400 patches has been observed to race the GPU buffer
+    // allocator and trigger `Failed to upload data to GPU
+    // (clEnqueueWriteBuffer)` mid-decode.
+    _triageInFlight = true;
+    try {
+      await _respondTo(
+        llmUserText,
+        useTriagePath: true,
+        intakeImage: _pendingImageJpeg,
+        intakeAudioWav: _pendingAudioWav,
+      );
+    } finally {
+      _triageInFlight = false;
+      _conversationActive = false;
+      _pendingImageJpeg = null;
+      _pendingAudioWav = null;
+    }
   }
 
   // ---- helpers ------------------------------------------------------
@@ -1449,24 +1511,55 @@ class AssistantCubit extends Cubit<AssistantState> {
     if (decoded == null) {
       throw const FormatException('Unsupported image format');
     }
-    // 384px longest edge: at 16x16 patches this lands the image at
-    // ~576 patches (24x24 max). The LiteRT-LM vision encoder still
-    // pads up to its `max_num_patches: 2520` ceiling regardless of
-    // source size, but a smaller JPEG keeps the FFI marshal + image
-    // decode path fast and cuts the foreground-thread CPU spike on
-    // mid-tier devices. 512 → 384 also shaves ~30% off the encode
-    // step (image.copyResize is pure Dart so size matters here too).
-    const longestEdge = 384;
-    final longest = decoded.width > decoded.height
-        ? decoded.width
-        : decoded.height;
-    final scaled = longest > longestEdge
-        ? img.copyResize(
+
+    // Force the camera frame to a fixed 16:9 landscape aspect by
+    // center-cropping. The LiteRT-LM vision encoder always tries to
+    // fit the LARGEST patch grid ≤ `max_num_patches: 2520` for the
+    // source aspect:
+    //   * 16:9 source → grid 66×36 = 2376 patches (94% — known stable)
+    //   * 8:5  source → grid 63×39 = 2457 patches (97% — crashes
+    //                                              Mali's OpenCL
+    //                                              buffer allocator
+    //                                              mid-decode)
+    //   * 1:1  source → grid 50×50 = 2500 patches (99% — guaranteed
+    //                                              crash)
+    // Pinning aspect ratio at 16:9 means every triage image lands at
+    // the same 2376-patch budget regardless of how the user framed
+    // their photo. The encoder still pads up to ~1056×576 internally,
+    // but the patch count never drifts toward the budget edge.
+    final aspectW = 16;
+    final aspectH = 9;
+    int cropW = decoded.width;
+    int cropH = decoded.height;
+    if (decoded.width * aspectH > decoded.height * aspectW) {
+      // Source is wider than 16:9 — crop the sides.
+      cropW = (decoded.height * aspectW / aspectH).round();
+    } else if (decoded.width * aspectH < decoded.height * aspectW) {
+      // Source is taller than 16:9 — crop top + bottom.
+      cropH = (decoded.width * aspectH / aspectW).round();
+    }
+    final cropX = (decoded.width - cropW) ~/ 2;
+    final cropY = (decoded.height - cropH) ~/ 2;
+    final cropped = (cropW != decoded.width || cropH != decoded.height)
+        ? img.copyCrop(
             decoded,
-            width: decoded.width >= decoded.height ? longestEdge : null,
-            height: decoded.height > decoded.width ? longestEdge : null,
+            x: cropX,
+            y: cropY,
+            width: cropW,
+            height: cropH,
           )
         : decoded;
+
+    // 384px longest edge: at 16×16 patches this lands the source at
+    // ~576 patches (24×24 max). The native vision encoder still pads
+    // up to its `max_num_patches: 2520` ceiling regardless of source
+    // size, but a smaller JPEG keeps the FFI marshal + image decode
+    // path fast and cuts the foreground-thread CPU spike on mid-tier
+    // devices.
+    const longestEdge = 384;
+    final scaled = cropped.width > longestEdge
+        ? img.copyResize(cropped, width: longestEdge)
+        : cropped;
     final bytes = img.encodeJpg(scaled, quality: 75);
     return Uint8List.fromList(bytes);
   }

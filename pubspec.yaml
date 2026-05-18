@@ -102,6 +102,11 @@ dependencies:
   # Telephony + clipboard for emergency SOS fallback
   url_launcher: ^6.3.2
 
+  # Native share sheet for forwarding triage reports out of the
+  # `TriageReportCard` — SMS / email / messaging / clipboard. Mobile
+  # plugin only; web is unused.
+  share_plus: ^11.1.0
+
   # Photo capture for triage intake. We use `image_picker` rather than
   # the lower-level `camera` plugin because all we need is a one-shot
   # capture-and-return — no live preview UI. Pulls in the system

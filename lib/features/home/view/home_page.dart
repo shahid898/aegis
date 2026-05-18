@@ -439,6 +439,19 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
         next.intakeOpen != old.intakeOpen ||
         next.surfaceReady != old.surfaceReady ||
         next.stage != old.stage;
+
+    // Detect a newly-appended triage turn so we can fire a follow-up
+    // scroll after the report card has had time to lay out. The first
+    // scroll snaps to the maxScrollExtent BEFORE TriageReportCard's
+    // image / body / actions tree has painted, which leaves the card
+    // pinned off-screen on a fresh chat where it's the very first
+    // turn. A second scroll one frame later catches the now-correct
+    // extent. Subsequent triage turns work fine because the prior
+    // assistant bubbles already establish a tall scrollable area.
+    final addedTriageTurn = next.turns.length > old.turns.length &&
+        next.turns.isNotEmpty &&
+        next.turns.last.report != null;
+
     if (grew) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!_controller.hasClients) return;
@@ -448,6 +461,26 @@ class _TranscriptAreaState extends State<_TranscriptArea> {
           curve: Curves.easeOut,
         );
       });
+    }
+
+    if (addedTriageTurn) {
+      // Schedule a follow-up jumpTo after the report card finishes
+      // its first layout pass. We chain three deferred scrolls because
+      // TriageReportCard contains an evidence image + multi-line body
+      // sections whose intrinsic heights only resolve over a couple
+      // of frames (image decode, text layout). Cheap to over-call;
+      // jumpTo on the same already-extended position is a no-op.
+      void scheduleSnap(Duration delay) {
+        Future<void>.delayed(delay, () {
+          if (!mounted) return;
+          if (!_controller.hasClients) return;
+          _controller.jumpTo(_controller.position.maxScrollExtent);
+        });
+      }
+
+      scheduleSnap(const Duration(milliseconds: 80));
+      scheduleSnap(const Duration(milliseconds: 240));
+      scheduleSnap(const Duration(milliseconds: 600));
     }
   }
 

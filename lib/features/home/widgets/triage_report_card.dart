@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/voice/triage_report.dart';
@@ -68,6 +69,8 @@ class TriageReportCard extends StatelessWidget {
                 const Divider(height: 1),
                 const SizedBox(height: 10),
                 _MetadataStrip(report: enriched),
+                const SizedBox(height: 12),
+                _ShareReportButton(report: enriched, accent: accent),
                 if (onConfirm != null || onReject != null) ...[
                   const SizedBox(height: 14),
                   _ConfirmRow(onConfirm: onConfirm, onReject: onReject),
@@ -1294,5 +1297,138 @@ class _ReportFieldRow extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Full-width "Share report" affordance pinned to the bottom of every
+/// rendered [TriageReport]. Composes a plain-text export of the report
+/// (title + severity + summary + GPS + body + immediate actions + the
+/// usual metadata) and hands it to the OS share sheet via
+/// `share_plus`. Lets the responder forward the report through SMS /
+/// email / messaging / clipboard / any other registered handler
+/// without needing a backend round-trip.
+class _ShareReportButton extends StatelessWidget {
+  const _ShareReportButton({required this.report, required this.accent});
+
+  final TriageReport report;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: () => _share(context),
+        icon: Icon(Icons.ios_share, size: 18, color: accent),
+        label: Text(
+          'Share report',
+          style: TextStyle(
+            color: accent,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+        ),
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          side: BorderSide(color: accent.withValues(alpha: 0.45)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _share(BuildContext context) async {
+    final text = _composeShareText(report);
+    final subject = _composeSubject(report);
+    // Position the share sheet near the tapped button on iPad / large
+    // screens — `share_plus` ignores it on phones but the plugin API
+    // wants a non-null Rect.
+    final box = context.findRenderObject() as RenderBox?;
+    final origin = box != null
+        ? box.localToGlobal(Offset.zero) & box.size
+        : Rect.zero;
+    final params = ShareParams(
+      text: text,
+      subject: subject,
+      sharePositionOrigin: origin,
+    );
+    try {
+      await SharePlus.instance.share(params);
+    } on Object {
+      // best-effort — failed share sheet (no handlers, user dismissed
+      // before native UI mounted) should not surface as an error.
+    }
+  }
+
+  static String _composeSubject(TriageReport r) {
+    final title = r.title.trim();
+    if (title.isEmpty) {
+      return 'Aegis triage report — ${r.severity}';
+    }
+    return 'Aegis triage: $title (${r.severity})';
+  }
+
+  static String _composeShareText(TriageReport r) {
+    final buf = StringBuffer();
+    if (r.title.trim().isNotEmpty) {
+      buf.writeln(r.title.trim());
+    }
+    final hazardPart = r.hazardType != null && r.hazardType!.isNotEmpty
+        ? ' · ${r.hazardType!.replaceAll('_', ' ')}'
+        : '';
+    buf.writeln('${r.severity} · ${r.format}$hazardPart');
+    if (r.summary.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln(r.summary.trim());
+    }
+    if (r.gps != null && r.gps!.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln('Location: ${r.gps}');
+    }
+    if (r.immediateActions.isNotEmpty) {
+      buf.writeln();
+      buf.writeln('Immediate actions:');
+      for (var i = 0; i < r.immediateActions.length; i++) {
+        buf.writeln('${i + 1}. ${r.immediateActions[i]}');
+      }
+    }
+    if (r.body.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln(r.body.trim());
+    }
+    final hasCasualty = r.casualtyStatus != null ||
+        r.casualtyCount != null ||
+        (r.casualtyTriageColor?.isNotEmpty ?? false);
+    if (hasCasualty) {
+      buf.writeln();
+      final parts = <String>[];
+      if (r.casualtyStatus != null) {
+        parts.add(r.casualtyStatus!.replaceAll('_', ' '));
+      }
+      if (r.casualtyCount != null) parts.add('${r.casualtyCount} reported');
+      if (r.casualtyTriageColor != null &&
+          r.casualtyTriageColor!.isNotEmpty) {
+        parts.add('triage: ${r.casualtyTriageColor}');
+      }
+      buf.writeln('Casualty: ${parts.join(' · ')}');
+    }
+    if (r.damageDescription != null &&
+        r.damageDescription!.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln('Damage: ${r.damageDescription!.trim()}');
+    }
+    if (r.recommendedSkill != null &&
+        r.recommendedSkill!.trim().isNotEmpty) {
+      buf.writeln();
+      buf.writeln('Recommended skill: ${r.recommendedSkill}');
+    }
+    buf.writeln();
+    buf.writeln('— Captured by Aegis offline triage');
+    if (r.preparedAt.trim().isNotEmpty) {
+      buf.writeln('Prepared at: ${r.preparedAt}');
+    }
+    return buf.toString().trim();
   }
 }

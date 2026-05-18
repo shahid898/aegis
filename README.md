@@ -115,6 +115,32 @@ release pipelines.
 
 ProGuard rules cover the LiteRT-LM JNI and ObjectBox generated classes; obfuscation is safe.
 
+### Sideloading the prebuilt APK
+
+Each tagged release ships a prebuilt `arm64-v8a` APK on the [Releases page](https://github.com/shahid898/aegis/releases). Sideloading requires two clicks past Android's defaults — both expected for any open-source APK not distributed through Play Store.
+
+1. **Download** the `app-arm64-v8a-release.apk` asset to the phone.
+2. **Open** the file. Android asks to grant *"Install unknown apps"* to your browser / file manager → toggle ON for that app, then tap **Install**.
+3. **Google Play Protect** then shows *"App blocked to protect your device"* with only an **OK** button (the older *Install anyway* link is hidden by default on modern Android). Two ways past it:
+
+   **Option A — pause Play Protect briefly (no cable needed)**
+   - Open **Play Store** → tap profile icon (top-right) → **Play Protect**
+   - Tap the gear icon → toggle off **"Scan apps with Play Protect"**
+   - Retry the APK install — completes cleanly
+   - Toggle Play Protect back ON; the installed app stays
+
+   **Option B — `adb install` (skips Play Protect entirely)**
+   - Phone: Settings → About phone → tap *Build number* 7× → developer mode on
+   - Phone: Settings → Developer options → toggle on **USB debugging**
+   - Cable in, run:
+     ```bash
+     adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+     ```
+
+The Play Protect warning fires because Google has never seen the signing cert before — true for every self-signed APK on GitHub, F-Droid, Diawi, etc. It does not indicate that the APK is malicious. Aegis is fully open-source — clone the repo and rebuild with `fvm flutter build apk --release` to verify the binary matches.
+
+After install, first launch downloads the model pack (~2.6 GB) and seeds the offline place database for the user's region. Budget 5-10 minutes on Wi-Fi.
+
 ---
 
 ## Project structure (high level)

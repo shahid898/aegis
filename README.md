@@ -17,29 +17,32 @@ When a cyclone takes the cell towers down, your emergency app cannot phone home.
 
 ## The Problem
 
-Every year, 200 million people are directly affected by natural disasters. In documented, repeatable ways, three failures recur — and each kills people who should have lived.
+Every year, **200 million people** are directly affected by natural disasters. Three failures recur — and each kills people who should have lived.
 
-### Failure 1: The alert arrives in the wrong language.
+### Failure 1 — The alert arrives in the wrong language
 
-In May 2013, a Guatemalan family of seven sheltered in a storm drain near El Reno, Oklahoma during a tornado outbreak. Spanish-speaking, they could not understand the English warnings. Flash floods killed all seven. The National Weather Service's own Service Assessment concluded the absence of Spanish-language meteorological products "prevented these communities from taking life-saving measures" [[1]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+- **El Reno tornado, May 2013** — A Guatemalan family of seven sheltered in a storm drain during the outbreak. Spanish-speaking, they could not understand the English warnings. Flash floods killed all seven. The NWS Service Assessment concluded the absence of Spanish-language meteorological products *"prevented these communities from taking life-saving measures"* [[1]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+- **Hurricane Ida, 2021** — 13 people drowned in New York basements, mostly immigrants from Nepal, China, and Trinidad. The NY Attorney General formally wrote that the English-and-Spanish-only WEA system *"contributed to tragic loss of life"* [[2]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+- **Multilingual WEA still not mandatory** — FCC adopted templates in 2023; carriers need not comply until **June 12, 2028** [[3]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). In April 2025 the NWS suspended its non-English translation service, cutting off **71 million people** [[4]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+- **Global gap** — India's SACHET supports 19 of 1,600+ languages [[5]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). Canada issued 1,307 emergency alerts 2019–2022 — zero in any Indigenous language [[6]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). WMO reports half of all countries lack adequate early-warning systems [[7]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
 
-When Hurricane Ida flooded New York basements in 2021, 13 people drowned — mostly immigrants from Nepal, China, and Trinidad. New York's Attorney General formally wrote that the English-and-Spanish-only Wireless Emergency Alert system "contributed to tragic loss of life" [[2]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+> **Aegis response.** Receives any government emergency alert and speaks it in the user's native language — on-device, offline. The same phone that received the English alert now speaks Hindi, Tamil, Bengali, or any of 140+ catalog languages.
 
-The FCC adopted multilingual templates in 2023 — carriers need not comply until June 12, 2028 [[3]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). In April 2025, the National Weather Service suspended its non-English translation service, cutting off 71 million people [[4]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). India's new SACHET system supports 19 of 1,600+ languages [[5]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). Canada issued 1,307 emergency alerts 2019–2022 — zero in any Indigenous language [[6]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language). WMO reports half of all countries lack adequate early warning systems [[7]](REFERENCES.md#failure-1--the-alert-arrives-in-the-wrong-language).
+### Failure 2 — What responders see never reaches command
 
-→ **Aegis receives any government emergency alert and speaks it in the user's native language — on-device, offline.** The same phone that received the English alert now speaks Hindi, Tamil, Bengali, or any of 140+ languages.
+- **Paper triage cards + radio relay** — first responders still record who is trapped, how badly injured, what language they speak on paper and read it back over radio.
+- **Tübingen 2024** — App-based triage measured **18 minutes faster** than paper in a UEFA Euro 2024 MCI simulation [[8]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command) — exactly the window in which a yellow casualty deteriorates to red or black.
+- **Goto 2025 (Japan)** — In an MCI with 18 foreign nationals, triage took **78% longer** for non-Japanese speakers, with mis-triage cases traced directly to language failure [[9]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command).
 
-### Failure 2: What responders see never reaches command.
+> **Aegis response.** Captures a survivor's voice statement in any of 140+ languages, photographs the scene, and generates a structured FEMA ICS-209 report, HAZUS damage grade, START triage colour, and GPS coordinates — entirely offline. A share button hands the report off the moment connectivity returns.
 
-First responders still record critical information — who is trapped, how badly injured, what language they speak — on paper triage cards and relay it by radio. A 2024 University Hospital Tübingen study measured digital triage 18 minutes faster than paper [[8]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command) — exactly the window in which a yellow casualty deteriorates to red or black. A 2025 Japan study of a mass casualty incident with 18 foreign nationals found triage took 78% longer for non-Japanese speakers, with mis-triage cases from language failure alone [[9]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command).
+### Failure 3 — When the internet dies, every tool dies with it
 
-→ **Aegis captures a survivor's voice statement in any of 140+ languages, photographs the scene, and generates a structured FEMA ICS-209 report, HAZUS damage grade, START triage colour, GPS coordinates — entirely offline.** A share button lets the responder send the report when connectivity returns.
+- **Hurricane Maria, 2017** — Puerto Rico's death toll was revised from 64 to **2,975**; power was out for **200+ days** [[10]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command).
+- **Türkiye earthquake, 2023** — 9,000 Humanitarian OpenStreetMap volunteers had to remap **two million buildings** because pre-quake maps required connectivity that no longer existed [[11]](REFERENCES.md#failure-2--when-the-internet-dies-every-tool-dies-with-it).
+- Google Maps, WhatsApp, online shelter finders — all depend on internet. Disasters destroy internet first.
 
-### Failure 3: When the internet dies, every tool dies with it.
-
-After Hurricane Maria in 2017, Puerto Rico's death toll was revised from 64 to 2,975; power was out for 200+ days [[10]](REFERENCES.md#failure-3--what-responders-see-never-reaches-command). After the 2023 Turkey earthquake, 9,000 Humanitarian OpenStreetMap volunteers had to remap two million buildings because existing maps required connectivity that no longer existed [[11]](REFERENCES.md#failure-2--when-the-internet-dies-every-tool-dies-with-it). Google Maps, WhatsApp, online shelter finders — all depend on internet. Disasters destroy internet first.
-
-→ **Aegis pre-downloads shelters, hospitals, and water points for the user's region at onboarding.** When a survivor asks for help in any language, Gemma 4 responds with spoken guidance and renders an inline map directly in the conversation — offline, no data connection.
+> **Aegis response.** Pre-downloads shelters, hospitals, and water points for the user's region at onboarding. When a survivor asks for help in any language, Gemma 4 responds with spoken guidance and renders an inline map directly in the conversation — offline, no data connection.
 
 Full source list for every claim above is in [`REFERENCES.md`](REFERENCES.md).
 

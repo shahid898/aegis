@@ -4,6 +4,41 @@ Sources for every factual claim in the Aegis writeup, video, and architecture do
 
 ---
 
+## Writeup citation key
+
+The writeup body cites references as `[1]` through `[11]`. Quick lookup mapping to entries in this file:
+
+| Writeup citation | Title | Entry below |
+|---|---|---|
+| [1] | Trujillo-Falcón et al. 2021 (El Reno, Spanish-language meteorological products) | [§ Failure 1 → Entry 6](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [2] | NY AG Letitia James (Hurricane Ida WEA) | [§ Failure 1 → Entry 5](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [3] | FCC ASL/multilingual WEA compliance date | [§ Failure 1 → Entry 4](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [4] | Houston Landing — NWS non-English translation pause | [§ Failure 1 → Entry 10](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [5] | PIB India SACHET launch | [§ Failure 1 → Entry 3](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [6] | The Conversation — Canada Indigenous-language alerts | [§ Failure 1 → Entry 11](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [7] | WMO Early Warnings for All | [§ Failure 1 → Entry 1](#failure-1--the-alert-arrives-in-the-wrong-language) |
+| [8] | Schmollinger et al. 2024 (digital triage 18 min) | [§ Failure 3 → Entry 22](#failure-3--what-responders-see-never-reaches-command) |
+| [9] | Goto et al. 2025 (Japan mass casualty) | [§ Failure 3 → Entry 23](#failure-3--what-responders-see-never-reaches-command) |
+| [10] | Cowan & Zavala 2021 (Maria + linguistic access) | [§ Failure 3 → Entry 24](#failure-3--what-responders-see-never-reaches-command) |
+| [11] | HOT Turkey-Syria 2023 | [§ Failure 2 → Entries 17–21](#failure-2--when-the-internet-dies-every-tool-dies-with-it) |
+
+---
+
+## Global disaster scale
+
+**[0] Centre for Research on the Epidemiology of Disasters (CRED) — EM-DAT International Disaster Database**
+UCLouvain, Belgium
+- https://www.emdat.be/
+- https://public.emdat.be/
+- *Supports: "Two hundred million people are hit by natural disasters every year" — multi-year averaged figure from EM-DAT, also cited by UNDRR and IFRC*
+
+**UN Office for Disaster Risk Reduction (UNDRR)**
+- https://www.undrr.org/
+- https://www.undrr.org/quick/11409
+- *Reinforces: UNDRR regularly cites 200M+ annual disaster-affected figure based on CRED data*
+
+---
+
 ## Failure 1 — The alert arrives in the wrong language
 
 ### Global scope of the problem
@@ -163,7 +198,14 @@ Natural Hazards Center, University of Colorado Boulder
 - LiteRT-LM bundle: https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm
 - File used: `gemma-4-E2B-it.litertlm` (2.59 GB)
 - License: Apache 2.0
-- *Built from Gemini 3 research — verified by Engadget, VentureBeat, Google DeepMind blog*
+
+**Gemma 4 built from Gemini 3 research** — verified across multiple sources:
+- Google DeepMind blog — Gemma 4 release announcement
+- Engadget — *"Google releases Gemma 4, a family of open models built off of Gemini 3"*
+- VentureBeat — *"the architecture draws from its commercial Gemini 3 research"*
+- Labellerr — *"Gemma 4 is built directly from Gemini 3 research"*
+- WaveSpeed — *"built from the same research lineage as Gemini 3"*
+- *Supports the claim "Built from Gemini 3 research" in the writeup's How We Used Gemma 4 capability table*
 
 ### On-device runtime
 

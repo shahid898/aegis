@@ -352,6 +352,40 @@ If you ship to consumers as a regular app, document the limitation in your store
 
 ---
 
+## Platform Caveats — Mali G76 GPU (Samsung Exynos Note 10 / S10)
+
+Vision triage on the Mali-G76 OpenCL driver wedges after a text-only chat decode runs in the same process.
+
+**Affected hardware**
+
+| Device | SoC | GPU | Status |
+|---|---|---|---|
+| Samsung Galaxy Note 10 / Note 10+ (`SM-N970F`, `SM-N975F`, `SM-N970U`, `SM-N975U`) | Exynos 9825 | **Mali-G76 MP12** | ❌ chat → triage crashes |
+| Samsung Galaxy S10 / S10+ / S10e (`SM-G970F`, `SM-G973F`, `SM-G975F`) | Exynos 9820 | **Mali-G76 MP12** | ❌ chat → triage crashes |
+| Samsung Galaxy A51 5G / A71 5G (Exynos variants) | Exynos 980 | **Mali-G76 MP5** | ❌ same family, same wedge expected |
+| Snapdragon variants of the same model | SDM855 / SDM8150 | Adreno 640 | ✅ unaffected |
+| Pixel 6 / 7 / 8, OnePlus 11, Xiaomi 13, Samsung S22+ | Tensor / SD8 Gen 1+ | Mali-G710+ / Adreno 730+ | ✅ unaffected |
+
+**Root cause.** Gemma 4 vision encode requires a single contiguous OpenCL buffer for the 66×36 = 2376-patch image grid (~ 50 MB). The Mali-G76 driver's OpenCL allocator fragments the buffer pool after a text-only chat decode and cannot defrag — `clEnqueueWriteBuffer` returns `CL_OUT_OF_RESOURCES` on the next vision call. The OpenCL context is process-level so `litert_lm_engine_delete` does not reclaim it; only a process restart clears the pool.
+
+**Field-confirmed pattern on Mali-G76**
+
+```
+cold launch → triage → chat → triage   = ✓  (66×36 kernel pre-compiled, buffer reused)
+cold launch → chat   → triage          = ✗  (pool fragmented, vision encode fails)
+```
+
+**Mitigations shipped in this repo**
+
+1. **Vision-first warmup** at every triage-sized engine create. A synthetic 384 × 216 (16:9) JPEG runs through the full triage code path so the OpenCL kernel for the 66 × 36 patch grid compiles and the contiguous buffer is allocated **before** any chat turn can fragment the pool. See `LlmService._warmVisionPath` and the engine-create comment.
+2. **Auto-restart on `EngineWedgedException`.** When the wedge is hit anyway (e.g. user types a chat turn that grows the engine past 4096 tokens, forcing a re-create on a fragmented pool), the cubit persists the in-flight intake (image + audio + transcript + GPS) to disk via `WedgeRecoveryStore`, then asks the native side to kill the process and relaunch via `AlarmManager`. Next launch reads the sidecar and re-fires `submitIntake` — the user sees a brief relaunch instead of a crash.
+
+Both mitigations are no-ops on Adreno / non-G76 Mali / Apple GPUs, where the OpenCL pool tolerates chat → vision transitions cleanly.
+
+**Recommendation.** For demos and partner pilots prefer Adreno-based phones (Pixel 6+, OnePlus 11, Xiaomi 13, Samsung S22 Snapdragon variants, etc.) or newer Mali-G710+ devices. Samsung Exynos 9820 / 9825 / 980 handsets work but will visibly re-launch on a `chat → triage` flow.
+
+---
+
 ## License
 
 Aegis is released under the **Apache License 2.0** — see [`LICENSE`](LICENSE) at the repo root. Apache 2.0 was picked over MIT because the project ships native AOSP integrations and may attract contributions from telco / OEM partners; the explicit patent grant matters there.

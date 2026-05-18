@@ -296,6 +296,7 @@ Total per region: roughly **2.7 GB** including model.
 | File | Purpose |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Full technical architecture with mermaid diagrams |
+| [`REFERENCES.md`](REFERENCES.md) | Sources & citations for every factual claim — WMO/FCC/PIB alert data, MCI triage research, model + standards URLs |
 | [`assets/skills/*/SKILL.md`](assets/skills) | Per-skill capability declarations |
 | `android/app/src/main/AndroidManifest.xml` | Permissions + native receivers + full-screen-intent activity |
 | `lib/core/voice/llm_service.dart` | Gemma 4 wrapper — read this first when changing tools or prompts |

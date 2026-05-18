@@ -252,7 +252,11 @@ class _HomeViewState extends State<_HomeView> {
       AssistantStage.transcribing => l.stageTranscribing,
       AssistantStage.thinking => l.stageThinking,
       AssistantStage.speaking => l.stageSpeaking,
-      AssistantStage.awaitingConfirmation => l.stageAwaitingConfirmation,
+      // Triage report auto-saves on the cubit side (30s auto-confirm
+      // timer + the report is already persisted to history at this
+      // point), so we suppress the "confirm or reject" prompt under
+      // the mic — fall through to the idle hint instead.
+      AssistantStage.awaitingConfirmation => l.stageIdle,
       AssistantStage.degraded => l.stageDegraded,
       AssistantStage.error => l.stageError,
     };

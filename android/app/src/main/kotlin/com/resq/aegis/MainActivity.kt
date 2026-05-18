@@ -5,7 +5,9 @@ import android.os.Bundle
 import com.resq.aegis.alert.AegisAlertPlugin
 import com.resq.aegis.alert.AlertConstants
 import com.resq.aegis.alert.AlertForegroundService
+import com.resq.aegis.restart.RestartHelper
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
 
 /**
  * Hosts the cached [FlutterEngine] created in [AegisApplication]. Reusing the
@@ -25,6 +27,14 @@ import io.flutter.embedding.android.FlutterActivity
 class MainActivity : FlutterActivity() {
 
     override fun getCachedEngineId(): String? = AegisApplication.ENGINE_ID
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        // Register the kill-and-relaunch MethodChannel. The Dart side
+        // invokes this on `EngineWedgedException` (Mali OpenCL pool
+        // fragmentation after chat→vision). See RestartHelper.
+        RestartHelper(applicationContext).attach(flutterEngine)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:image/image.dart' as img;
 
 import '../places/map_view_query.dart';
 import '../skills/skills_registry.dart';
@@ -485,6 +486,20 @@ class LlmService {
 
   InferenceModel? _model;
   InferenceChat? _chat;
+
+  /// Sticky flag tracking whether a chat / ask / oneShot turn has run
+  /// on the current `_model` engine handle since it was last rebuilt.
+  /// Flipped true at the END of any text-only generation. Read by
+  /// [_generateReportOnce]: when an incoming triage carries an image
+  /// and a chat turn already touched this engine, we force-dispose
+  /// the engine first so vision prefill runs on a fresh OpenCL
+  /// context. Without that dispose, Mali devices crash inside
+  /// `RunDecodeAsync` because the engine's KV-cache / GPU-buffer
+  /// allocator inherits stale layout from the chat session and the
+  /// vision decoder hits `clEnqueueWriteBuffer` mid-prefill.
+  /// Cleared in [_disposeModel].
+  bool _chatSessionUsedEngine = false;
+
   bool _installed = false;
   Future<void>? _loadFuture;
   String? _preferredLanguage;
@@ -787,6 +802,10 @@ class LlmService {
     try {
       await session.addQueryChunk(Message.text(text: userPrompt, isUser: true));
       final raw = await session.getResponse();
+      // One-shot text decode taints the engine for the same reason
+      // chat does — KV-cache layout settles in text-only shape and
+      // a follow-up image-bearing triage crashes on Mali.
+      _chatSessionUsedEngine = true;
       return _sanitizeFinalResponse(raw);
     } finally {
       try {
@@ -979,6 +998,45 @@ class LlmService {
         'from triage input',
       );
     }
+
+    // Chat→vision transition guard. On Mali devices the engine's
+    // KV-cache / GPU buffer allocator inherits stale layout from a
+    // text-only chat turn — the next vision-enabled triage then
+    // crashes inside `RunDecodeAsync` with `clEnqueueWriteBuffer`.
+    // Force a fresh engine when the incoming triage has an image AND
+    // a chat session has touched the current engine. Pure-text triage
+    // (no image) reuses the warm engine fine, so we skip the dispose
+    // in that case to avoid paying the ~11s cold-create tax for no
+    // benefit. Same-session triage→triage with an image also reuses
+    // the engine — only the cross-modality chat→vision boundary is
+    // dangerous.
+    if (hasImage && _chatSessionUsedEngine && _model != null) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] chat→vision boundary: disposing engine before '
+          'triage so vision prefill starts on a clean GPU allocator',
+        );
+      }
+      await _disposeModel();
+      // GPU cooldown. The Mali driver on at least the Samsung Note 10
+      // (SM-N975F) holds OpenCL fences for several seconds after
+      // `litert_lm_engine_delete` returns — recreating the engine
+      // immediately rebuilds on a still-poisoned context and the next
+      // vision prefill crashes with `clEnqueueWriteBuffer` /
+      // `DYNAMIC_UPDATE_SLICE` mid-decode. The EGL throttling log
+      // (`Throttling EGL Production: fence … didn't signal in 3000 ms`)
+      // suggests the driver's max stall budget is ~3 s, so we wait
+      // slightly longer than that to let pending fences drain before
+      // requesting a fresh `engine_create`.
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] chat→vision cooldown: waiting 3500ms for Mali '
+          'OpenCL fences to drain before engine_create',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 3500));
+    }
+
     final model = await _ensureModel(maxTokens: maxTokens);
     final systemPrompt = await _buildTriageSystemPrompt();
     final userPrompt = _buildTriageUserPrompt(input, includeImage: hasImage);
@@ -1678,6 +1736,9 @@ match-mesh-beacon (missing person).
       await chat.addQueryChunk(Message.text(text: wrapped, isUser: true));
       final response = await chat.generateChatResponse();
       final raw = response is TextResponse ? response.token : '';
+      // Mark engine as chat-tainted so the next image-bearing triage
+      // disposes + rebuilds before vision prefill.
+      _chatSessionUsedEngine = true;
       return _sanitizeFinalResponse(raw, userText: userText);
     } on Object {
       await _disposeChat();
@@ -1788,11 +1849,20 @@ match-mesh-beacon (missing person).
               // bubble forever.
               headBuffer.write(token);
               final head = headBuffer.toString();
-              if (head.contains('render_map_view(')) {
+              // Two opener variants:
+              //   `render_map_view(` — Python-style (English prompts)
+              //   `render_map_view{` — JSON / Gemma escape-pair style
+              //     (observed on Hindi prompts; body uses `<|"|>` as
+              //     the quote token instead of `"`).
+              final pyIdx = head.indexOf('render_map_view(');
+              final jsonIdx = head.indexOf('render_map_view{');
+              final markerIdx = pyIdx >= 0
+                  ? (jsonIdx >= 0 ? (pyIdx < jsonIdx ? pyIdx : jsonIdx) : pyIdx)
+                  : jsonIdx;
+              if (markerIdx >= 0) {
                 // Tool call detected — discard any preamble before
                 // the marker (model occasionally prefixes whitespace
                 // or quotes) and keep only the call itself.
-                final markerIdx = head.indexOf('render_map_view(');
                 headBuffer
                   ..clear()
                   ..write(head.substring(markerIdx));
@@ -1862,6 +1932,9 @@ match-mesh-beacon (missing person).
       while (mapEvents.isNotEmpty) {
         yield mapEvents.removeAt(0);
       }
+      // Mark engine as chat-tainted (see field doc on
+      // `_chatSessionUsedEngine`).
+      _chatSessionUsedEngine = true;
     } on Object {
       await _disposeChat();
       rethrow;
@@ -1889,16 +1962,20 @@ match-mesh-beacon (missing person).
   /// while still being a hard upper bound on first-token latency.
   static const int _inlineCallProbeLimit = 64;
   static const String _renderMapMarker = 'render_map_view(';
+  static const String _renderMapMarkerCurly = 'render_map_view{';
 
-  /// True when [text] could still grow into the `render_map_view(`
-  /// marker via concatenation. Lets us hold off on flushing the
+  /// True when [text] could still grow into either supported tool-call
+  /// marker (`render_map_view(` Python-style OR `render_map_view{`
+  /// JSON-style) via concatenation. Lets us hold off on flushing the
   /// buffer to the chat-text stream until we know the model isn't
   /// about to commit to a tool call.
   static bool _isPrefixOfRenderMapView(String text) {
     if (text.length >= _renderMapMarker.length) {
-      return text.contains(_renderMapMarker);
+      return text.contains(_renderMapMarker) ||
+          text.contains(_renderMapMarkerCurly);
     }
-    return _renderMapMarker.startsWith(text);
+    return _renderMapMarker.startsWith(text) ||
+        _renderMapMarkerCurly.startsWith(text);
   }
 
   bool _looksLikeToolCallJson(String token) {
@@ -1918,11 +1995,20 @@ match-mesh-beacon (missing person).
   /// Returns null while the call is still streaming so the caller can
   /// keep accumulating tokens.
   ChatMapCall? _tryParseInlinePythonCall(String buffer) {
-    final openIdx = buffer.indexOf('render_map_view(');
+    final pyIdx = buffer.indexOf('render_map_view(');
+    final jsonIdx = buffer.indexOf('render_map_view{');
+    // Prefer whichever marker appeared first.
+    final useJson = jsonIdx >= 0 && (pyIdx < 0 || jsonIdx < pyIdx);
+    final openIdx = useJson ? jsonIdx : pyIdx;
     if (openIdx < 0) return null;
-    final argsStart = openIdx + 'render_map_view('.length;
+    final markerLen =
+        useJson ? 'render_map_view{'.length : 'render_map_view('.length;
+    final argsStart = openIdx + markerLen;
+    final closingChar = useJson ? '}' : ')';
     // Walk forward respecting quoted strings + bracket nesting to find
-    // the matching closing paren. Anything else inside is opaque.
+    // the matching closing bracket. The JSON variant uses Gemma's
+    // `<|"|>` escape-pair instead of `"` for string delimiters, so
+    // we detect both forms.
     var depth = 1;
     var i = argsStart;
     var inString = false;
@@ -1935,19 +2021,60 @@ match-mesh-beacon (missing person).
         escape = true;
       } else if (ch == '"') {
         inString = !inString;
+      } else if (!inString && buffer.startsWith('<|"|>', i)) {
+        // Gemma's escape-pair quote — treat as a balanced delimiter
+        // pair on its own. Skip past it; matching peer flips state
+        // again on next encounter.
+        inString = !inString;
+        i += '<|"|>'.length;
+        continue;
       } else if (!inString) {
         if (ch == '(' || ch == '[' || ch == '{') {
           depth++;
         } else if (ch == ')' || ch == ']' || ch == '}') {
           depth--;
-          if (depth == 0 && ch == ')') {
-            return _coerceInlineArgs(buffer.substring(argsStart, i));
+          if (depth == 0 && ch == closingChar) {
+            final body = buffer.substring(argsStart, i);
+            return useJson
+                ? _coerceInlineJsonArgs(body)
+                : _coerceInlineArgs(body);
           }
         }
       }
       i++;
     }
     return null;
+  }
+
+  /// JSON-curly variant body parser. Body looks like
+  /// `categories:[<|"|>fuel_station<|"|>],radius_km:5,
+  /// spoken_summary:<|"|>...<|"|>`. Strips Gemma `<|"|>` escape pairs
+  /// to real double quotes, wraps bare keys in quotes, then feeds to
+  /// `jsonDecode`. Falls back to null on any parse failure (caller
+  /// renders raw text instead — better than crashing the turn).
+  ChatMapCall? _coerceInlineJsonArgs(String body) {
+    try {
+      // Convert Gemma's `<|"|>` to real `"`.
+      var normalized = body.replaceAll('<|"|>', '"');
+      // Quote bare keys: `categories:` → `"categories":`. Match a
+      // word-char run followed by `:` not already inside quotes.
+      normalized = normalized.replaceAllMapped(
+        RegExp(r'(?<![\w"])([A-Za-z_][A-Za-z0-9_]*)\s*:'),
+        (m) => '"${m.group(1)}":',
+      );
+      final wrapped = '{$normalized}';
+      final decoded = jsonDecode(wrapped);
+      if (decoded is! Map<String, Object?>) return null;
+      return ChatMapCall(MapViewQuery.fromArgs(decoded));
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] inline JSON tool-call parse failed: $e '
+          'body=${body.length > 120 ? "${body.substring(0, 120)}..." : body}',
+        );
+      }
+      return null;
+    }
   }
 
   /// Pull keyword arguments out of a Python-style call body
@@ -2395,12 +2522,35 @@ match-mesh-beacon (missing person).
           '(history=${chat.fullHistory.length} messages dropped)',
         );
       }
+      // Stop any in-flight native generation BEFORE closing the
+      // chat. flutter_gemma's `chat.close()` only tears down the
+      // Dart-side wrapper; the underlying LiteRT-LM
+      // `conversation.process` keeps running in a native isolate
+      // until it returns. If we then dispose the engine (chat→vision
+      // boundary guard) while native is still decoding, the engine's
+      // OpenCL context gets pulled out from under the live worker
+      // and the next vision prefill crashes with
+      // `clEnqueueWriteBuffer` mid-decode.
+      try {
+        await chat.stopGeneration();
+      } on Object {
+        // best-effort — older flutter_gemma builds may not implement
+        // stopGeneration on every platform.
+      }
       try {
         await chat.close();
       } on Object {
         // best-effort
       }
     }
+  }
+
+  /// Hard cancellation entry-point for the cubit. Tears down any
+  /// in-flight chat decode + closes the chat handle, blocking until
+  /// the native generation has actually stopped. Use before kicking
+  /// off a triage submit to guarantee the engine is idle.
+  Future<void> cancelOngoingGeneration() async {
+    await _disposeChat();
   }
 
   String _sanitizeFinalResponse(String response, {String? userText}) {
@@ -2686,6 +2836,52 @@ match-mesh-beacon (missing person).
         );
       }
       _model = model;
+
+      // ---- Vision warmup (16:9 grid, triage-identical config) ----
+      // Mali OpenCL compiles a separate kernel per-grid-shape. The
+      // real triage image is center-cropped to 16:9 → encoder packs
+      // it onto a 66×36 patch grid (2376 patches). Earlier warmup
+      // attempts used a 1:1 (64×64) probe, which compiled a 48×48
+      // grid kernel — useless for the real triage which then had
+      // to compile a 66×36 kernel from scratch on a chat-poisoned
+      // OpenCL pool and crashed.
+      //
+      // Field-confirmed pattern (Samsung Note 10):
+      //   triage1 (16:9) → chat → triage2 (16:9) = ✓
+      //   chat           → triage (16:9)         = ✗
+      // The first triage compiles the 66×36 kernel; subsequent
+      // triages reuse it.
+      //
+      // Warmup here generates a 384×216 (16:9) dummy JPEG and runs
+      // a tool-equipped vision decode using the EXACT same chat
+      // config as `_generateReportOnce`. Forces the 66×36 kernel
+      // to compile on the freshly-created engine BEFORE any text-
+      // only chat can fragment the OpenCL pool.
+      // Gate: warmup prefill is ~1587 tokens (tight system prompt +
+      // tool jinja + 2376 image patches). Chat-sized engines (1024)
+      // reject it with INVALID_ARGUMENT and leave the engine in a
+      // bad state that breaks subsequent chat input. Only warm when
+      // the engine is sized for triage (>= 4096).
+      if (effective >= 4096) {
+        try {
+          await _warmVisionPath(model);
+        } on Object catch (e) {
+          if (kDebugMode) {
+            debugPrint(
+              '[Aegis][LLM] vision warmup failed (non-fatal, the engine '
+              'is still usable for text-only paths and triage may still '
+              'work cold): $e',
+            );
+          }
+        }
+      } else if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] vision warmup skipped — engine maxTokens='
+          '$effective < 4096 (chat-sized). Warmup will run when the '
+          'engine is next recreated at triage size.',
+        );
+      }
+
       completer.complete();
       return model;
     } on Object catch (e, st) {
@@ -2702,6 +2898,96 @@ match-mesh-beacon (missing person).
       unawaited(completer.future.catchError((Object _) {}));
       _loadFuture = null;
       rethrow;
+    }
+  }
+
+  /// Cached synthetic 16:9 JPEG used by [_warmVisionPath]. Same aspect
+  /// as the real triage's center-cropped 16:9 input so the native
+  /// vision encoder packs both onto the SAME 66×36 patch grid —
+  /// triggering compile of the identical OpenCL kernel and pre-warming
+  /// the same buffer allocation pattern. Built once per process.
+  static Uint8List? _warmupVisionJpeg;
+
+  /// Build a 384×216 (16:9) grey JPEG. Matches `_shrinkJpeg`'s
+  /// post-crop output exactly — encoder will pack it to 1056×576 (the
+  /// same upscale path) and generate 66×36 = 2376 patches.
+  static Uint8List _buildWarmupJpeg() {
+    final cached = _warmupVisionJpeg;
+    if (cached != null) return cached;
+    final image = img.Image(width: 384, height: 216);
+    img.fill(image, color: img.ColorRgb8(128, 128, 128));
+    final bytes = img.encodeJpg(image, quality: 75);
+    final out = Uint8List.fromList(bytes);
+    _warmupVisionJpeg = out;
+    return out;
+  }
+
+  /// Run a throwaway triage-identical vision decode on a freshly-
+  /// created [InferenceModel] so the 66×36 OpenCL kernel + vision
+  /// buffers compile + allocate BEFORE any text-only chat can
+  /// fragment the pool. See engine-create comment for full rationale.
+  Future<void> _warmVisionPath(InferenceModel model) async {
+    final sw = Stopwatch()..start();
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][LLM] vision warmup begin — 16:9 grid (66×36 patches), '
+        'triage-identical chat config',
+      );
+    }
+    final warmupImage = _buildWarmupJpeg();
+    final chat = await model.createChat(
+      // EXACT same chat config as `_generateReportOnce` so the
+      // native conversation_create matches what the real triage
+      // would invoke. Any drift here (tools / toolChoice / sampling
+      // / modality flags) triggers re-init on the real triage's
+      // createChat and trips Mali allocator.
+      temperature: 0.3,
+      topK: 40,
+      topP: 0.9,
+      supportImage: true,
+      supportAudio: false,
+      supportsFunctionCalls: true,
+      tools: <Tool>[_renderTriageReportTool],
+      toolChoice: ToolChoice.required,
+      modelType: ModelType.gemma4,
+      isThinking: false,
+      systemInstruction: 'You are Aegis offline triage. '
+          'Call render_triage_report ONCE with placeholder values. '
+          'This is a vision-pipeline warmup probe.',
+    );
+    try {
+      await chat.addQueryChunk(
+        Message(
+          text: 'Warmup probe — emit a minimal placeholder report.',
+          isUser: true,
+          imageBytes: warmupImage,
+        ),
+      );
+      // 180 s hard cap. The 66×36 OpenCL kernel compile is heavy on
+      // Mali — first invocation can spend 2-3 minutes on shader
+      // compile + buffer upload. Subsequent invocations reuse cached
+      // kernels and run in ~10 s.
+      await chat.generateChatResponse().timeout(
+        const Duration(seconds: 180),
+        onTimeout: () {
+          throw TimeoutException(
+            'Vision warmup exceeded 180s — engine may be wedged but '
+            'text-only paths still usable.',
+          );
+        },
+      );
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][LLM] vision warmup ok '
+          'elapsedMs=${sw.elapsedMilliseconds}',
+        );
+      }
+    } finally {
+      try {
+        await chat.close();
+      } on Object {
+        // best-effort
+      }
     }
   }
 
@@ -2754,6 +3040,10 @@ match-mesh-beacon (missing person).
     await _disposeChat();
     final model = _model;
     _model = null;
+    // Fresh engine has no chat history — reset the flag so the next
+    // triage doesn't unnecessarily re-dispose the freshly created
+    // handle.
+    _chatSessionUsedEngine = false;
     if (model != null) {
       try {
         await model.close();

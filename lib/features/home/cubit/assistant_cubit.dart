@@ -18,6 +18,7 @@ import '../../../core/storage/storage_service.dart';
 import '../../../core/voice/audio_recorder_service.dart';
 import '../../../core/voice/listening_cue_player.dart';
 import '../../../core/voice/llm_service.dart';
+import '../../../core/voice/wedge_recovery.dart';
 import '../../../core/voice/model_catalog.dart';
 import '../../../core/voice/model_pack.dart';
 import '../../../core/voice/stt_service.dart';
@@ -501,6 +502,13 @@ class AssistantCubit extends Cubit<AssistantState> {
       // hardware precisely because it has no warmUp. First triage /
       // alert pays the ~10s cold-start tax here instead.
       emit(state.copyWith(stage: AssistantStage.idle));
+
+      // Wedge-restart replay. If the prior process was killed by
+      // `WedgeRestarter` after a Mali OpenCL wedge, the pending
+      // intake snapshot lives on disk. Read it back + fire the
+      // triage automatically so the user sees the report continue
+      // instead of having to re-capture the photo.
+      unawaited(_replayPendingWedgeIntake());
     } on Object catch (e) {
       emit(
         state.copyWith(
@@ -509,6 +517,31 @@ class AssistantCubit extends Cubit<AssistantState> {
         ),
       );
     }
+  }
+
+  Future<void> _replayPendingWedgeIntake() async {
+    final pending = await WedgeRecoveryStore().tryConsumePending();
+    if (pending == null) return;
+    if (kDebugMode) {
+      debugPrint(
+        '[Aegis][Cubit] wedge replay: re-firing triage from persisted '
+        'pending intake transcript="${pending.intake.transcript}" '
+        'hasImage=${pending.image != null} '
+        'hasAudio=${pending.audio != null}',
+      );
+    }
+    _pendingImageJpeg = pending.image;
+    _pendingAudioWav = pending.audio;
+    emit(state.copyWith(
+      intakeText: pending.intake.transcript,
+      pendingUserImage: pending.image,
+      pendingUserAudio: pending.audio,
+      intakeHasPhoto: pending.image != null,
+      intakeHasAudio: pending.audio != null,
+    ));
+    // Replay the submit. `submitIntake` reads `_pendingImageJpeg` /
+    // `_pendingAudioWav` and the intake text from state.
+    await submitIntake();
   }
 
   // `_warmEngine` (boot-time `LlmService.warmUp` wrapper) intentionally
@@ -1154,6 +1187,58 @@ class AssistantCubit extends Cubit<AssistantState> {
         audioWav: intakeAudioWav,
         gpsContext: gpsContext,
       ));
+    } on EngineWedgedException catch (e, st) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] generateReport WEDGED '
+          'elapsedMs=${sw.elapsedMilliseconds} — kicking off auto-restart',
+        );
+        debugPrintStack(stackTrace: st, label: '[Aegis][Cubit] wedge stack');
+      }
+      // Auto-recovery flow: Mali GPU OpenCL context is poisoned on
+      // this device. Only fix is process restart. Persist the user's
+      // pending intake to disk so the relaunched process picks it up
+      // and replays the triage without forcing the user to redo the
+      // capture. Worst case (alarm fails to fire / persistence
+      // fails), we fall through to the regular error UI below.
+      emit(state.copyWith(
+        stage: AssistantStage.thinking,
+        errorMessage: 'Recovering GPU — restarting…',
+      ));
+      try {
+        await WedgeRecoveryStore().save(
+          transcript: transcript,
+          gpsContext: gpsContext,
+          imageJpeg: intakeImage,
+          audioWav: intakeAudioWav,
+        );
+        await WedgeRestarter().restartNow(reason: 'mali-opencl-wedge');
+        // If `restartNow` actually killed the process, the next line
+        // never runs. If it returned because the host channel failed
+        // we fall through to the regular error emit so the user gets
+        // a clear surface.
+      } on Object catch (recoverError, recoverSt) {
+        if (kDebugMode) {
+          debugPrint(
+            '[Aegis][Cubit] wedge auto-restart failed: $recoverError',
+          );
+          debugPrintStack(
+            stackTrace: recoverSt,
+            label: '[Aegis][Cubit] wedge-restart stack',
+          );
+        }
+      }
+      // Fallthrough — if we get here the restart didn't fire. Surface
+      // the original wedge error so the UI can show the manual
+      // force-stop hint.
+      emit(state.copyWith(
+        stage: AssistantStage.error,
+        errorMessage: e.toString(),
+        pendingUserImage: null,
+        pendingUserAudio: null,
+      ));
+      _conversationActive = false;
+      return;
     } on Object catch (e, st) {
       if (kDebugMode) {
         debugPrint(
@@ -1473,6 +1558,55 @@ class AssistantCubit extends Cubit<AssistantState> {
       }
     }
 
+    // Tear down any in-flight chat conversation BEFORE the triage
+    // submit. If a chat utterance VAD-listen session is still open
+    // (mic hot from a prior turn the user didn't explicitly stop),
+    // its 30s cap can fire mid-triage and kick off a concurrent
+    // `askStream` call on the same engine. Two LLM calls share the
+    // KV cache — second prefill clobbers the first one's tensors
+    // and the vision decoder crashes inside `RunDecodeAsync` with
+    // `clEnqueueWriteBuffer`. Cancelling `_sttSub` + `_llmSub` here
+    // guarantees triage owns the engine for the duration.
+    if (_conversationActive ||
+        _sttSub != null ||
+        _llmSub != null ||
+        state.stage == AssistantStage.listening ||
+        state.stage == AssistantStage.transcribing ||
+        state.stage == AssistantStage.thinking ||
+        state.stage == AssistantStage.speaking) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] submitIntake: tearing down chat session '
+          '(stage=${state.stage} conv=$_conversationActive '
+          'stt=${_sttSub != null} llm=${_llmSub != null}) '
+          'so triage owns the engine',
+        );
+      }
+      await stopConversation();
+    }
+
+    // CRITICAL: cancel any in-flight NATIVE chat decode. The
+    // `stopConversation` above only cancels Dart-side stream
+    // subscriptions — the underlying LiteRT-LM `conversation.process`
+    // call keeps decoding tokens in a native isolate until it returns
+    // (we've observed runs of 929+ chunks / 150s+ when the model
+    // commits to a long reply). If we let triage proceed while native
+    // decode is still pumping the GPU, the chat→vision boundary
+    // guard's `_disposeModel` rips the OpenCL context out from under
+    // the live worker → next vision prefill crashes inside
+    // `clEnqueueWriteBuffer`. `cancelOngoingGeneration` blocks until
+    // the native side has actually stopped.
+    try {
+      await _llm.cancelOngoingGeneration();
+    } on Object catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          '[Aegis][Cubit] submitIntake: cancelOngoingGeneration '
+          'failed (non-fatal): $e',
+        );
+      }
+    }
+
     final llmUserText = text.isEmpty ? '(see attached evidence)' : text;
     emit(state.copyWith(
       intakeOpen: false,
@@ -1481,7 +1615,17 @@ class AssistantCubit extends Cubit<AssistantState> {
       pendingUserImage: _pendingImageJpeg,
       pendingUserAudio: _pendingAudioWav,
     ));
-    _conversationActive = true;
+    // Do NOT set `_conversationActive = true` here. That flag drives
+    // [_runListenLoop]'s `while (_conversationActive)` chat capture
+    // loop — flipping it back to true after the `stopConversation()`
+    // teardown above lets the chat listen loop restart its mic the
+    // moment `_captureUtterance` returns (its 30s cap then fires
+    // mid-triage and kicks off a concurrent `askStream` LLM call on
+    // the SAME engine, clobbering the vision prefill tensors and
+    // crashing `RunDecodeAsync` with `clEnqueueWriteBuffer` /
+    // `DYNAMIC_UPDATE_SLICE`). Triage runs as a one-shot session;
+    // it doesn't need `_conversationActive`.
+    //
     // Suppress mic-open / mic-close chimes for the entire triage
     // submit → respond → wedge-or-done window. `just_audio` decoding
     // the chime through MediaCodec while the Mali vision encoder is
@@ -1498,7 +1642,6 @@ class AssistantCubit extends Cubit<AssistantState> {
       );
     } finally {
       _triageInFlight = false;
-      _conversationActive = false;
       _pendingImageJpeg = null;
       _pendingAudioWav = null;
     }
